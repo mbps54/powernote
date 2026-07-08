@@ -1,0 +1,10 @@
+services:
+  powernote:
+    build:
+      context: .
+    container_name: powernote
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data

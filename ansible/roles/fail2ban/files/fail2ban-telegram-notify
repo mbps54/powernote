@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import socket
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+def read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env-file", required=True, type=Path)
+    parser.add_argument("--jail", required=True)
+    parser.add_argument("--ip", required=True)
+    parser.add_argument("--failures", default="unknown")
+    parser.add_argument("--bantime", required=True)
+    args = parser.parse_args()
+
+    env = read_env(args.env_file)
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat_ids = [
+        value.strip()
+        for value in env.get("ALLOWED_TELEGRAM_USER_IDS", "").split(",")
+        if value.strip()
+    ]
+    if not token or not chat_ids:
+        print("Telegram token or allowed user IDs are not configured", file=sys.stderr)
+        return 1
+
+    text = (
+        "Fail2ban заблокировал IP\n\n"
+        f"Сервер: {socket.gethostname()}\n"
+        f"Jail: {args.jail}\n"
+        f"IP: {args.ip}\n"
+        f"Неудачных попыток: {args.failures}\n"
+        f"Срок блокировки: {args.bantime}"
+    )
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    for chat_id in chat_ids:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.status != 200:
+                    print(
+                        f"Telegram returned HTTP {response.status}",
+                        file=sys.stderr,
+                    )
+                    return 1
+        except (urllib.error.URLError, TimeoutError) as error:
+            print(f"Telegram notification failed: {error}", file=sys.stderr)
+            return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

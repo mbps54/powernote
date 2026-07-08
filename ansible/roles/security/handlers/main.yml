@@ -1,0 +1,17 @@
+- name: Reload systemd configuration
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: Restart SSH listener
+
+- name: Restart SSH socket
+  ansible.builtin.systemd:
+    name: ssh.socket
+    enabled: true
+    state: restarted
+  listen: Restart SSH listener
+
+- name: Restart SSH service
+  ansible.builtin.systemd:
+    name: ssh.service
+    state: restarted
+  listen: Restart SSH listener

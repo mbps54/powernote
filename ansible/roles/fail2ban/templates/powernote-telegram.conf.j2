@@ -1,0 +1,2 @@
+[Definition]
+actionban = /usr/local/sbin/fail2ban-telegram-notify --env-file "{{ fail2ban_powernote_env_file }}" --jail "<name>" --ip "<ip>" --failures "<failures>" --bantime "{{ fail2ban_bantime }}"

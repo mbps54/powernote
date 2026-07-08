@@ -1,0 +1,10 @@
+[sshd]
+enabled = true
+port = {{ fail2ban_ssh_port }}
+backend = systemd
+banaction = nftables-multiport
+action = %(action_)s
+         powernote-telegram
+maxretry = {{ fail2ban_maxretry }}
+findtime = {{ fail2ban_findtime }}
+bantime = {{ fail2ban_bantime }}

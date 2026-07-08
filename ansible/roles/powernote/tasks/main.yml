@@ -1,0 +1,139 @@
+- name: Assert Ubuntu 24.04
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Ubuntu"
+      - ansible_distribution_version is version("24.04", ">=")
+      - (ansible_user | default("") | length) > 0
+      - (powernote_env_file | default("") | length) > 0
+    fail_msg: "Powernote deploy requires Ubuntu 24.04+, ansible_user and powernote_env_file."
+
+- name: Check local environment file
+  ansible.builtin.stat:
+    path: "{{ powernote_env_file }}"
+  delegate_to: localhost
+  become: false
+  register: powernote_local_env
+
+- name: Assert local environment file exists
+  ansible.builtin.assert:
+    that:
+      - powernote_local_env.stat.exists
+      - powernote_local_env.stat.isreg
+    fail_msg: "Create and configure {{ powernote_env_file }} before deployment."
+  delegate_to: localhost
+  become: false
+
+- name: Install system dependencies
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - docker.io
+      - docker-compose-v2
+      - python3
+      - rsync
+    state: present
+    update_cache: true
+
+- name: Enable Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add Ansible user to docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  when: ansible_user != "root"
+
+- name: Create project directory
+  ansible.builtin.file:
+    path: "{{ powernote_project_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Create data directory
+  ansible.builtin.file:
+    path: "{{ powernote_project_dir }}/data"
+    state: directory
+    owner: "{{ powernote_container_uid }}"
+    group: "{{ powernote_container_gid }}"
+    mode: "0755"
+    recurse: true
+
+- name: Copy Dockerfile
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../Dockerfile"
+    dest: "{{ powernote_project_dir }}/Dockerfile"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+  notify: Rebuild Powernote service
+
+- name: Copy Docker Compose file
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../docker-compose.yml"
+    dest: "{{ powernote_project_dir }}/docker-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+  notify: Rebuild Powernote service
+
+- name: Copy Python project metadata
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../pyproject.toml"
+    dest: "{{ powernote_project_dir }}/pyproject.toml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+  notify: Rebuild Powernote service
+
+- name: Copy application source
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../src"
+    dest: "{{ powernote_project_dir }}/"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: preserve
+  notify: Rebuild Powernote service
+
+- name: Copy environment file
+  ansible.builtin.copy:
+    src: "{{ powernote_env_file }}"
+    dest: "{{ powernote_project_dir }}/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+  notify: Recreate Powernote container
+
+- name: Apply pending image and container changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Check whether Powernote container is running
+  ansible.builtin.command:
+    cmd: docker compose ps --status running --quiet powernote
+    chdir: "{{ powernote_project_dir }}"
+  register: powernote_running_container
+  changed_when: false
+
+- name: Start Powernote from existing image when stopped
+  ansible.builtin.command:
+    cmd: docker compose up -d --no-build --remove-orphans
+    chdir: "{{ powernote_project_dir }}"
+  when: powernote_running_container.stdout | trim == ""
+  changed_when: true
+
+- name: Show running containers
+  ansible.builtin.command:
+    cmd: docker compose ps
+    chdir: "{{ powernote_project_dir }}"
+  register: powernote_compose_ps
+  changed_when: false
+
+- name: Print compose status
+  ansible.builtin.debug:
+    var: powernote_compose_ps.stdout_lines

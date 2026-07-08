@@ -1,0 +1,4 @@
+powernote_project_dir: /opt/powernote
+powernote_env_file: "{{ playbook_dir }}/../../.env"
+powernote_container_uid: "1000"
+powernote_container_gid: "1000"

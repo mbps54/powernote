@@ -1,0 +1,56 @@
+- name: Install OpenSSH server
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+
+- name: Create SSH server configuration directory
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure SSH daemon port
+  ansible.builtin.template:
+    src: sshd-port.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-powernote-port.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart SSH listener
+
+- name: Create SSH socket override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ssh.socket.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure systemd SSH socket port
+  ansible.builtin.template:
+    src: ssh-socket.conf.j2
+    dest: /etc/systemd/system/ssh.socket.d/10-powernote-port.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart SSH listener
+
+- name: Validate SSH daemon configuration
+  ansible.builtin.command:
+    cmd: /usr/sbin/sshd -t
+  changed_when: false
+
+- name: Apply pending SSH listener changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the new SSH port from the control machine
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ security_ssh_port }}"
+    state: started
+    timeout: 30
+  delegate_to: localhost
+  become: false

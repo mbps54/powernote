@@ -1,0 +1,5 @@
+fail2ban_ssh_port: "{{ security_ssh_port | default(65022) }}"
+fail2ban_maxretry: 5
+fail2ban_findtime: 10m
+fail2ban_bantime: 24h
+fail2ban_powernote_env_file: /opt/powernote/.env

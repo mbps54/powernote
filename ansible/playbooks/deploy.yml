@@ -1,0 +1,8 @@
+- name: Deploy Powernote
+  hosts: powernote
+  gather_facts: true
+
+  roles:
+    - role: security
+    - role: fail2ban
+    - role: powernote

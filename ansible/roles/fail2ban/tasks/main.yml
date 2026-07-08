@@ -1,0 +1,64 @@
+- name: Install Fail2ban dependencies
+  ansible.builtin.apt:
+    name:
+      - fail2ban
+      - python3-systemd
+    state: present
+    update_cache: true
+
+- name: Install Telegram notification script
+  ansible.builtin.copy:
+    src: fail2ban-telegram-notify
+    dest: /usr/local/sbin/fail2ban-telegram-notify
+    owner: root
+    group: root
+    mode: "0750"
+  notify: Restart Fail2ban
+
+- name: Configure Telegram notification action
+  ansible.builtin.template:
+    src: powernote-telegram.conf.j2
+    dest: /etc/fail2ban/action.d/powernote-telegram.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Fail2ban
+
+- name: Configure SSH jail
+  ansible.builtin.template:
+    src: sshd.local.j2
+    dest: /etc/fail2ban/jail.d/sshd.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Fail2ban
+
+- name: Validate Fail2ban configuration
+  ansible.builtin.command:
+    cmd: fail2ban-client -t
+  changed_when: false
+
+- name: Apply pending Fail2ban changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: Wait for Fail2ban control socket
+  ansible.builtin.wait_for:
+    path: /var/run/fail2ban/fail2ban.sock
+    state: present
+    timeout: 15
+
+- name: Read SSH jail status
+  ansible.builtin.command:
+    cmd: fail2ban-client status sshd
+  register: fail2ban_sshd_status
+  changed_when: false
+
+- name: Print SSH jail status
+  ansible.builtin.debug:
+    var: fail2ban_sshd_status.stdout_lines
