@@ -1,6 +1,6 @@
-# Powernote
+# PowerNote AI
 
-Powernote is a personal Telegram-based voice diary for factual notes. Send a voice or text message to the bot, and the service uses OpenAI to transcribe audio, extract factual events, assign tags, store entries locally, and answer semantic questions over your diary with embeddings and an LLM.
+PowerNote AI is a personal AI voice diary for factual notes. Send a voice or text message to the Telegram bot, and the service uses OpenAI to transcribe audio, extract factual events, assign tags, store entries locally, and answer semantic questions over your diary with embeddings and an LLM.
 
 The project is designed as a self-hosted personal service. It runs with Docker Compose and includes an Ansible playbook for provisioning and deploying the full service to Ubuntu 24.04.
 
