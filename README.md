@@ -151,11 +151,15 @@ all:
     powernote:
       hosts:
         powernote-prod:
-          ansible_host: 203.0.113.10
+          ansible_host: YOUR_SERVER_IP
           ansible_user: root
           ansible_port: 65022
           ansible_ssh_private_key_file: ~/.ssh/id_rsa
 ```
+
+Replace `YOUR_SERVER_IP` with your VPS public IP address.
+
+The `65022` SSH port is intentional. The Ansible `security` role moves SSH away from the default port `22` to reduce background internet noise from automated scanners. After the first successful deploy, keep using `65022` in your inventory and SSH commands.
 
 ### 2. Prepare Service Configuration
 
@@ -191,7 +195,7 @@ The playbook performs a full server setup and deploy:
 ### 4. Check The Server
 
 ```bash
-ssh -p 65022 -i ~/.ssh/id_rsa root@203.0.113.10
+ssh -p 65022 -i ~/.ssh/id_rsa root@YOUR_SERVER_IP
 cd /opt/powernote
 docker compose ps
 docker compose logs -f powernote
