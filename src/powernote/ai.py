@@ -6,7 +6,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from .models import DiaryEntry, ExtractionResult
+from .models import DiaryEntry, ExtractionResult, HealthExtractionResult, UserProfile
 
 
 SYSTEM_PROMPT = """Ты модуль личного дневника фактов.
@@ -56,6 +56,53 @@ ANSWER_SYSTEM_PROMPT = """Ты отвечаешь на вопросы польз
 7. Не перечисляй все найденные записи и не описывай процесс поиска.
 """
 
+HEALTH_SYSTEM_PROMPT = """Ты персональный нутрициолог и фитнес-тренер внутри личного Telegram-дневника.
+
+Твоя задача: определить, есть ли в сообщении пользователя сведения о питании или фитнесе, и если есть, вернуть структурированную оценку.
+
+Важные правила:
+1. Анализируй только то, что явно сказано пользователем.
+2. Если сообщение не про еду, напитки, калории, БЖУ, прием пищи, тренировку, прогулку, бег, спорт или физическую активность, верни is_nutrition=false и is_fitness=false.
+3. Если количество еды не указано, оценивай разумную среднюю порцию, но отражай неопределенность в score_reason.
+4. nutrition health_score от 0 до 100: 100 значит очень полезно и хорошо подходит цели пользователя, 50 нейтрально, 0 очень плохо. Учитывай белок, клетчатку, овощи/цельные продукты, сахар, алкоголь, ультраобработанные продукты, избыток калорий и цель снижения веса.
+5. fitness effort_score от 0 до 100: 100 значит отличная тренировка для текущего уровня и целей, 50 умеренная активность, 0 почти нет полезной нагрузки. Учитывай длительность, интенсивность, силовую нагрузку, кардио, восстановление и цель укрепления мышц.
+6. Не ставь медицинские диагнозы и не давай опасных рекомендаций.
+7. Возвращай числа без единиц измерения.
+8. Ответ строго JSON без markdown.
+
+JSON schema:
+{
+  "is_nutrition": true,
+  "is_fitness": false,
+  "nutrition_entries": [
+    {
+      "datetime_hint": null,
+      "meal_name": "завтрак",
+      "items": ["овсянка", "банан"],
+      "calories_kcal": 420,
+      "protein_g": 18,
+      "fat_g": 10,
+      "carbs_g": 65,
+      "fiber_g": 8,
+      "health_score": 78,
+      "score_reason": "Хорошая клетчатка и умеренная калорийность, но белка можно больше."
+    }
+  ],
+  "fitness_entries": [
+    {
+      "datetime_hint": null,
+      "activity_type": "бег",
+      "duration_minutes": 30,
+      "intensity": "moderate",
+      "muscle_groups": ["legs"],
+      "estimated_calories_kcal": 300,
+      "effort_score": 75,
+      "score_reason": "Хорошая кардио-нагрузка для текущей цели."
+    }
+  ]
+}
+"""
+
 
 class DiaryAI:
     def __init__(
@@ -99,6 +146,31 @@ class DiaryAI:
         )
         content = response.choices[0].message.content or '{"entries":[],"new_tags":[]}'
         return ExtractionResult.model_validate_json(content)
+
+    async def extract_health(
+        self,
+        raw_text: str,
+        profile: UserProfile,
+        message_datetime: datetime,
+    ) -> HealthExtractionResult:
+        user_payload = {
+            "profile": profile.model_dump(),
+            "message_datetime": message_datetime.isoformat(),
+            "raw_text": raw_text,
+        }
+        response = await self.client.chat.completions.create(
+            model=self.fact_model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": HEALTH_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            ],
+        )
+        content = response.choices[0].message.content or (
+            '{"is_nutrition":false,"is_fitness":false,'
+            '"nutrition_entries":[],"fitness_entries":[]}'
+        )
+        return HealthExtractionResult.model_validate_json(content)
 
     async def create_embeddings(self, texts: list[str]) -> list[list[float]]:
         if not texts:

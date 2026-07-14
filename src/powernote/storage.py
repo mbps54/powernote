@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from .models import DiaryEntry, EmbeddingRecord
+from .models import DiaryEntry, EmbeddingRecord, FitnessEntry, NutritionEntry, UserProfile
 
 
 DEFAULT_TAGS = [
@@ -33,6 +33,11 @@ class DiaryStorage:
         self.tags_path = data_dir / "tags.json"
         self.raw_transcripts_path = data_dir / "raw_transcripts.log"
         self.embeddings_path = data_dir / "embeddings.jsonl"
+        self.profile_path = data_dir / "profile.json"
+        self.nutrition_log_path = data_dir / "nutrition.log"
+        self.nutrition_jsonl_path = data_dir / "nutrition.jsonl"
+        self.fitness_log_path = data_dir / "fitness.log"
+        self.fitness_jsonl_path = data_dir / "fitness.jsonl"
 
     def ensure_initialized(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -40,11 +45,28 @@ class DiaryStorage:
         self.diary_jsonl_path.touch(exist_ok=True)
         self.raw_transcripts_path.touch(exist_ok=True)
         self.embeddings_path.touch(exist_ok=True)
+        self.nutrition_log_path.touch(exist_ok=True)
+        self.nutrition_jsonl_path.touch(exist_ok=True)
+        self.fitness_log_path.touch(exist_ok=True)
+        self.fitness_jsonl_path.touch(exist_ok=True)
+        if not self.profile_path.exists():
+            self.write_profile(UserProfile())
         if not self.tags_path.exists():
             self.tags_path.write_text(
                 json.dumps({"tags": DEFAULT_TAGS}, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
+
+    def read_profile(self) -> UserProfile:
+        self.ensure_initialized()
+        return UserProfile.model_validate_json(self.profile_path.read_text(encoding="utf-8"))
+
+    def write_profile(self, profile: UserProfile) -> None:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.profile_path.write_text(
+            profile.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def get_tags(self) -> list[str]:
         self.ensure_initialized()
@@ -85,6 +107,48 @@ class DiaryStorage:
 
         self.update_tags([tag for entry in entries for tag in entry.tags])
 
+    def append_nutrition_entries(self, entries: list[NutritionEntry]) -> None:
+        self.ensure_initialized()
+        if not entries:
+            return
+
+        with self.nutrition_jsonl_path.open("a", encoding="utf-8") as jsonl_file:
+            for entry in entries:
+                jsonl_file.write(entry.model_dump_json() + "\n")
+
+        with self.nutrition_log_path.open("a", encoding="utf-8") as log_file:
+            for entry in entries:
+                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
+                items = ", ".join(entry.items)
+                log_file.write(
+                    f"{timestamp} [{entry.meal_name}] score={entry.health_score}\n"
+                    f"{items}\n"
+                    f"kcal={entry.calories_kcal:.0f}, protein={entry.protein_g:.1f}g, "
+                    f"fat={entry.fat_g:.1f}g, carbs={entry.carbs_g:.1f}g, "
+                    f"fiber={entry.fiber_g:.1f}g\n"
+                    f"{entry.score_reason}\n\n"
+                )
+
+    def append_fitness_entries(self, entries: list[FitnessEntry]) -> None:
+        self.ensure_initialized()
+        if not entries:
+            return
+
+        with self.fitness_jsonl_path.open("a", encoding="utf-8") as jsonl_file:
+            for entry in entries:
+                jsonl_file.write(entry.model_dump_json() + "\n")
+
+        with self.fitness_log_path.open("a", encoding="utf-8") as log_file:
+            for entry in entries:
+                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
+                muscles = ", ".join(entry.muscle_groups)
+                log_file.write(
+                    f"{timestamp} [{entry.activity_type}] score={entry.effort_score}\n"
+                    f"duration={entry.duration_minutes} min, intensity={entry.intensity}, "
+                    f"muscles={muscles}, kcal={entry.estimated_calories_kcal:.0f}\n"
+                    f"{entry.score_reason}\n\n"
+                )
+
     def read_entries(self) -> list[DiaryEntry]:
         self.ensure_initialized()
         entries: list[DiaryEntry] = []
@@ -94,11 +158,99 @@ class DiaryStorage:
             entries.append(DiaryEntry.model_validate_json(line))
         return entries
 
+    def read_nutrition_entries(self) -> list[NutritionEntry]:
+        self.ensure_initialized()
+        entries: list[NutritionEntry] = []
+        for line in self.nutrition_jsonl_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entries.append(NutritionEntry.model_validate_json(line))
+        return entries
+
+    def read_fitness_entries(self) -> list[FitnessEntry]:
+        self.ensure_initialized()
+        entries: list[FitnessEntry] = []
+        for line in self.fitness_jsonl_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entries.append(FitnessEntry.model_validate_json(line))
+        return entries
+
     def last_entries(self, limit: int = 5) -> list[DiaryEntry]:
         return self.read_entries()[-limit:]
 
     def entries_for_date(self, target_date: date) -> list[DiaryEntry]:
         return [entry for entry in self.read_entries() if entry.datetime.date() == target_date]
+
+    def nutrition_for_date(self, target_date: date) -> list[NutritionEntry]:
+        return [
+            entry
+            for entry in self.read_nutrition_entries()
+            if entry.datetime.date() == target_date
+        ]
+
+    def fitness_for_week(self, week_date: date) -> list[FitnessEntry]:
+        week_start = week_date - timedelta(days=week_date.weekday())
+        week_end = week_start + timedelta(days=7)
+        return [
+            entry
+            for entry in self.read_fitness_entries()
+            if week_start <= entry.datetime.date() < week_end
+        ]
+
+    @staticmethod
+    def nutrition_totals(entries: list[NutritionEntry]) -> dict[str, float]:
+        calories = sum(entry.calories_kcal for entry in entries)
+        weighted_score = sum(entry.health_score * max(entry.calories_kcal, 1) for entry in entries)
+        score_weight = sum(max(entry.calories_kcal, 1) for entry in entries)
+        return {
+            "calories_kcal": calories,
+            "protein_g": sum(entry.protein_g for entry in entries),
+            "fat_g": sum(entry.fat_g for entry in entries),
+            "carbs_g": sum(entry.carbs_g for entry in entries),
+            "fiber_g": sum(entry.fiber_g for entry in entries),
+            "health_score": weighted_score / score_weight if score_weight else 0,
+        }
+
+    @staticmethod
+    def fitness_totals(entries: list[FitnessEntry], profile: UserProfile) -> dict[str, float]:
+        active_minutes = sum(entry.duration_minutes for entry in entries)
+        strength_sessions = sum(
+            1
+            for entry in entries
+            if any(
+                marker in entry.activity_type.lower()
+                for marker in ("strength", "сил", "gym", "зал", "weights", "гантел")
+            )
+        )
+        cardio_sessions = sum(
+            1
+            for entry in entries
+            if any(
+                marker in entry.activity_type.lower()
+                for marker in ("run", "бег", "walk", "ход", "bike", "cardio", "кардио")
+            )
+        )
+        effort_score = (
+            sum(entry.effort_score for entry in entries) / len(entries)
+            if entries
+            else 0
+        )
+        minute_progress = active_minutes / max(profile.fitness_targets.weekly_active_minutes, 1)
+        strength_progress = strength_sessions / max(profile.fitness_targets.weekly_strength_sessions, 1)
+        cardio_progress = cardio_sessions / max(profile.fitness_targets.weekly_cardio_sessions, 1)
+        success_percent = min(
+            100,
+            (minute_progress * 0.5 + strength_progress * 0.3 + cardio_progress * 0.2) * 100,
+        )
+        return {
+            "active_minutes": active_minutes,
+            "strength_sessions": strength_sessions,
+            "cardio_sessions": cardio_sessions,
+            "estimated_calories_kcal": sum(entry.estimated_calories_kcal for entry in entries),
+            "effort_score": effort_score,
+            "success_percent": success_percent,
+        }
 
     def entries_by_tag(self, tag: str, limit: int = 10) -> list[DiaryEntry]:
         normalized = tag.strip().lower()

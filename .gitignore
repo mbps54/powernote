@@ -10,3 +10,4 @@ venv/
 data/*.log
 data/*.jsonl
 data/tags.json
+data/profile.json

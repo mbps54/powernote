@@ -1,6 +1,6 @@
 # PowerNote AI
 
-PowerNote AI is a personal AI voice diary for factual notes. Send a voice or text message to the Telegram bot, and the service uses OpenAI to transcribe audio, extract factual events, assign tags, store entries locally, and answer semantic questions over your diary with embeddings and an LLM.
+PowerNote AI is a personal AI voice diary for factual notes, nutrition tracking, and fitness logging. Send a voice or text message to the Telegram bot, and the service uses OpenAI to transcribe audio, extract factual events, detect food and workout logs, store entries locally, and answer semantic questions over your diary with embeddings and an LLM.
 
 The project is designed as a self-hosted personal service. It runs with Docker Compose and includes an Ansible playbook for provisioning and deploying the full service to Ubuntu 24.04.
 
@@ -11,11 +11,19 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 - Speech-to-text via OpenAI.
 - Fact and tag extraction via OpenAI with structured JSON output.
 - Semantic question answering over diary entries using embeddings and an LLM.
+- Nutrition detection with estimated calories, protein, fat, carbs, fiber, and a health score.
+- Fitness detection with weekly progress, effort score, and success percentage against profile-based targets.
+- User health profile with default targets and an interactive `/profile_setup` questionnaire.
 - Persistent `Search` button for quick questions.
 - Local file-based storage:
   - `data/diary.log`
   - `data/diary.jsonl`
   - `data/embeddings.jsonl`
+  - `data/nutrition.log`
+  - `data/nutrition.jsonl`
+  - `data/fitness.log`
+  - `data/fitness.jsonl`
+  - `data/profile.json`
   - `data/tags.json`
   - `data/raw_transcripts.log`
 - Bot commands:
@@ -25,6 +33,10 @@ The project is designed as a self-hosted personal service. It runs with Docker C
   - `/tags` - list known tags.
   - `/tag <tag>` - show entries by tag.
   - `/search <query>` - answer a question using diary content.
+  - `/profile` - show nutrition and fitness profile settings.
+  - `/profile_setup` - run a profile setup questionnaire.
+  - `/nutrition_today` - show today's nutrition totals.
+  - `/fitness_week` - show this week's fitness progress.
   - `/cancel` - cancel search input mode.
 
 ## Project Structure
@@ -126,6 +138,8 @@ docker compose down
 
 Data is stored in the local `./data` directory.
 
+When a message contains food, PowerNote AI stores it in `nutrition.jsonl` instead of the factual diary and replies with estimated calories, protein, fat, carbs, fiber, the added health score, and today's totals. When a message contains a workout or physical activity, it stores it in `fitness.jsonl` and replies with the added activity plus this week's progress and success percentage.
+
 ## Remote Deploy To Ubuntu 24.04 With Ansible
 
 Control machine requirements:
@@ -226,6 +240,20 @@ The user talked to their mother. The mother said she would arrive on Saturday.
 
 `data/raw_transcripts.log` stores raw text transcripts before fact extraction. This helps preserve input when the OpenAI API is temporarily unavailable.
 
+`data/nutrition.jsonl`:
+
+```json
+{"datetime":"2026-07-14T09:30:00+02:00","meal_name":"breakfast","items":["oatmeal","banana"],"calories_kcal":420,"protein_g":18,"fat_g":10,"carbs_g":65,"fiber_g":8,"health_score":78,"score_reason":"Good fiber and moderate calories, but protein could be higher.","source":"text","raw_text":"I had oatmeal with a banana for breakfast."}
+```
+
+`data/fitness.jsonl`:
+
+```json
+{"datetime":"2026-07-14T19:00:00+02:00","activity_type":"run","duration_minutes":30,"intensity":"moderate","muscle_groups":["legs"],"estimated_calories_kcal":300,"effort_score":75,"score_reason":"Good cardio session for the current goal.","source":"voice","raw_text":"I ran for 30 minutes."}
+```
+
+`data/profile.json` stores the local health profile used for nutrition and fitness scoring. By default it assumes a 40-year-old person, 76 kg, 176 cm, desk job, with a goal to lose 5 kg and build muscle. Run `/profile_setup` in the bot to update it interactively.
+
 ## Security Notes
 
 - Do not commit `.env` or real inventory files.
@@ -234,6 +262,7 @@ The user talked to their mother. The mother said she would arrive on Saturday.
 - Set `ALLOWED_TELEGRAM_USER_IDS` for a private diary.
 - The Ansible deployment configures SSH on port `65022` and installs Fail2ban with Telegram ban notifications.
 - The app stores diary data locally on your server. No database or external storage service is required.
+- Nutrition and fitness scores are estimates for personal tracking. They are not medical advice.
 
 ## Language Notes
 
