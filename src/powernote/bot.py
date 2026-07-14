@@ -148,15 +148,33 @@ def format_nutrition_remaining(profile: UserProfile, totals: dict[str, float]) -
     calories_left = calorie_target - totals["calories_kcal"]
     protein_left = max(0, protein_target - totals["protein_g"])
     calorie_text = (
-        f"осталось {calories_left:.0f} ккал"
+        f"{calories_left:.0f}/{calorie_target:.0f} ккал"
         if calories_left >= 0
-        else f"перебор {-calories_left:.0f} ккал"
+        else f"+{-calories_left:.0f} ккал сверх {calorie_target:.0f}"
     )
-    return (
-        "Осталось на сегодня: "
-        f"{calorie_text} из лимита {calorie_target:.0f} ккал, "
-        f"белка добрать {protein_left:.1f} г из цели {protein_target:.0f} г"
-    )
+    return f"Осталось: {calorie_text}, белок +{protein_left:.0f} г"
+
+
+def format_nutrition_advice(profile: UserProfile, totals: dict[str, float]) -> str:
+    calories_left = profile.nutrition_targets.calories_kcal - totals["calories_kcal"]
+    protein_left = profile.nutrition_targets.protein_g - totals["protein_g"]
+    fiber_left = profile.nutrition_targets.fiber_g - totals["fiber_g"]
+    score = totals["health_score"]
+
+    if protein_left > 35:
+        return (
+            "Совет дня: сильно не хватает белка. "
+            "Следующий прием пищи лучше сделать белковым: рыба, курица, яйца, творог или йогурт без сахара."
+        )
+    if protein_left > 15:
+        return "Совет дня: белок пока ниже цели. Добавьте порцию белкового продукта без лишнего сахара."
+    if calories_left < 0:
+        return "Совет дня: лимит калорий уже превышен. Дальше лучше только легкая белковая еда или овощи."
+    if fiber_left > 10:
+        return "Совет дня: мало клетчатки. Добавьте овощи, ягоды, бобовые или цельнозерновые продукты."
+    if score < 55:
+        return "Совет дня: качество питания сегодня слабое. Сделайте следующий прием пищи проще: белок плюс овощи."
+    return "Совет дня: день идет нормально. Держите фокус на белке, овощах и умеренной калорийности."
 
 
 def format_fitness_totals(prefix: str, totals: dict[str, float]) -> str:
@@ -395,6 +413,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 f"{format_nutrition_totals('Добавлено', added)}\n"
                 f"{format_nutrition_totals('Сегодня', day)}\n"
                 f"{format_nutrition_remaining(profile, day)}\n"
+                f"{format_nutrition_advice(profile, day)}\n"
                 f"Комментарий: {nutrition_entries[-1].score_reason or 'Оценка сохранена.'}"
             )
 
@@ -584,7 +603,8 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         totals = storage.nutrition_totals(entries)
         await message.answer(
             f"{format_nutrition_totals('Питание сегодня', totals)}\n"
-            f"{format_nutrition_remaining(profile, totals)}"
+            f"{format_nutrition_remaining(profile, totals)}\n"
+            f"{format_nutrition_advice(profile, totals)}"
         )
 
     @router.message(Command("fitness_week"))
