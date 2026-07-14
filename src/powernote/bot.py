@@ -154,6 +154,96 @@ def format_fitness_totals(prefix: str, totals: dict[str, float]) -> str:
     )
 
 
+NUTRITION_HINTS = (
+    "ел",
+    "ела",
+    "съел",
+    "съела",
+    "поел",
+    "поела",
+    "завтрак",
+    "обед",
+    "ужин",
+    "перекус",
+    "пил",
+    "пила",
+    "выпил",
+    "выпила",
+    "гр",
+    "грамм",
+    "мл",
+    "ккал",
+    "калор",
+    "белк",
+    "жир",
+    "углев",
+    "овсян",
+    "каша",
+    "молок",
+    "кофе",
+    "сахар",
+    "макарон",
+    "паста",
+    "рис",
+    "овощ",
+    "тунец",
+    "тунц",
+    "куриц",
+    "рыб",
+    "мяс",
+    "творог",
+    "йогурт",
+    "банан",
+    "яблок",
+    "салат",
+    "суп",
+    "хлеб",
+    "meal",
+    "breakfast",
+    "lunch",
+    "dinner",
+    "snack",
+)
+
+FITNESS_HINTS = (
+    "трен",
+    "спорт",
+    "фитнес",
+    "бег",
+    "бегал",
+    "бегала",
+    "ходил",
+    "ходила",
+    "прогул",
+    "зал",
+    "гантел",
+    "штанг",
+    "отжим",
+    "присед",
+    "кардио",
+    "йога",
+    "плав",
+    "велосип",
+    "workout",
+    "fitness",
+    "run",
+    "walk",
+    "gym",
+    "cardio",
+)
+
+
+def infer_auto_mode(raw_text: str) -> EntryMode:
+    normalized = raw_text.lower().replace("ё", "е")
+    nutrition_score = sum(1 for hint in NUTRITION_HINTS if hint in normalized)
+    fitness_score = sum(1 for hint in FITNESS_HINTS if hint in normalized)
+    if nutrition_score >= 2 and nutrition_score >= fitness_score:
+        return "nutrition"
+    if fitness_score >= 2 and fitness_score > nutrition_score:
+        return "fitness"
+    return "auto"
+
+
 def is_allowed(message: Message, settings: Settings) -> bool:
     if not settings.allowed_telegram_user_ids:
         return True
@@ -311,8 +401,9 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
 
         message_datetime = datetime.now(settings.timezone)
         storage.append_raw_transcript(message_datetime, source, raw_text)
+        effective_mode = infer_auto_mode(raw_text) if mode == "auto" else mode
         if mode in ("auto", "nutrition", "fitness"):
-            if await process_health(message, raw_text, source, message_datetime, mode):
+            if await process_health(message, raw_text, source, message_datetime, effective_mode):
                 return
             if mode == "nutrition":
                 await message.answer("Не удалось распознать питание в сообщении. Попробуйте описать еду и порции подробнее.")

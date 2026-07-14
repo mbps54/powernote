@@ -151,7 +151,7 @@ Use the Telegram mode buttons when category accuracy matters:
 
 You can also use commands: `/note`, `/food`, and `/fitness`.
 
-When no mode is selected, PowerNote AI still tries to auto-detect whether a message is food, fitness, or a regular diary note. Explicit mode selection is more reliable.
+When no mode is selected, PowerNote AI still tries to auto-detect whether a message is food, fitness, or a regular diary note. Auto mode uses simple local keyword routing before asking the LLM, so obvious food or workout messages are less likely to be saved to the factual diary by mistake. Explicit mode selection is still the most reliable option.
 
 When a message contains food, PowerNote AI replies with estimated calories, protein, fat, carbs, fiber, the added health score, and today's totals. When a message contains a workout or physical activity, it replies with the added activity plus this week's progress and success percentage.
 
