@@ -4,6 +4,7 @@ import logging
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject
@@ -18,16 +19,34 @@ from .storage import DiaryStorage
 
 logger = logging.getLogger(__name__)
 
+EntryMode = Literal["auto", "diary", "nutrition", "fitness"]
+
+DIARY_BUTTON_TEXT = "Дневник"
+NUTRITION_BUTTON_TEXT = "Питание"
+FITNESS_BUTTON_TEXT = "Фитнес"
 SEARCH_BUTTON_TEXT = "Поиск"
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text=SEARCH_BUTTON_TEXT)]],
+    keyboard=[
+        [
+            KeyboardButton(text=DIARY_BUTTON_TEXT),
+            KeyboardButton(text=NUTRITION_BUTTON_TEXT),
+            KeyboardButton(text=FITNESS_BUTTON_TEXT),
+        ],
+        [KeyboardButton(text=SEARCH_BUTTON_TEXT)],
+    ],
     resize_keyboard=True,
-    input_field_placeholder="Запись в дневник или вопрос",
+    input_field_placeholder="Выберите режим или отправьте запись",
 )
 
 
 class SearchState(StatesGroup):
     waiting_for_query = State()
+
+
+class EntryModeState(StatesGroup):
+    waiting_for_diary = State()
+    waiting_for_nutrition = State()
+    waiting_for_fitness = State()
 
 
 class ProfileSetupState(StatesGroup):
@@ -206,10 +225,16 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             return
         await message.answer(answer)
 
-    async def process_health(message: Message, raw_text: str, source: str, message_datetime: datetime) -> bool:
+    async def process_health(
+        message: Message,
+        raw_text: str,
+        source: str,
+        message_datetime: datetime,
+        mode: EntryMode = "auto",
+    ) -> bool:
         profile = storage.read_profile()
         try:
-            health = await diary_ai.extract_health(raw_text, profile, message_datetime)
+            health = await diary_ai.extract_health(raw_text, profile, message_datetime, mode)
         except Exception:
             logger.exception("Health extraction failed")
             return False
@@ -230,7 +255,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 raw_text=raw_text,
             )
             for item in health.nutrition_entries
-            if health.is_nutrition and (item.items or item.calories_kcal > 0)
+            if mode != "fitness" and health.is_nutrition and (item.items or item.calories_kcal > 0)
         ]
         fitness_entries = [
             FitnessEntry(
@@ -246,7 +271,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 raw_text=raw_text,
             )
             for item in health.fitness_entries
-            if health.is_fitness and (item.duration_minutes > 0 or item.activity_type.strip())
+            if mode != "nutrition" and health.is_fitness and (item.duration_minutes > 0 or item.activity_type.strip())
         ]
 
         if not nutrition_entries and not fitness_entries:
@@ -280,14 +305,22 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         await message.answer("\n\n".join(chunks))
         return True
 
-    async def process_text(message: Message, raw_text: str, source: str) -> None:
+    async def process_text(message: Message, raw_text: str, source: str, mode: EntryMode = "auto") -> None:
         if await reject_if_needed(message):
             return
 
         message_datetime = datetime.now(settings.timezone)
         storage.append_raw_transcript(message_datetime, source, raw_text)
-        if await process_health(message, raw_text, source, message_datetime):
-            return
+        if mode in ("auto", "nutrition", "fitness"):
+            if await process_health(message, raw_text, source, message_datetime, mode):
+                return
+            if mode == "nutrition":
+                await message.answer("Не удалось распознать питание в сообщении. Попробуйте описать еду и порции подробнее.")
+                return
+            if mode == "fitness":
+                await message.answer("Не удалось распознать фитнес-активность. Попробуйте указать вид активности и длительность.")
+                return
+
         try:
             extraction = await diary_ai.extract_facts(raw_text, storage.get_tags(), message_datetime)
         except Exception:
@@ -325,14 +358,39 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         else:
             await message.answer("Фактических событий для сохранения не найдено.")
 
+    async def transcribe_voice_message(message: Message, bot: Bot) -> str | None:
+        if not message.voice:
+            return None
+        await message.answer("Голосовое получено, расшифровываю.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "voice.ogg"
+            await bot.download(message.voice.file_id, destination=audio_path)
+            try:
+                raw_text = await diary_ai.transcribe(audio_path)
+            except Exception:
+                logger.exception("Failed to transcribe voice message")
+                await message.answer(
+                    "Не удалось расшифровать голосовое: сервис распознавания сейчас недоступен. "
+                    "Попробуйте позже или отправьте текстом."
+                )
+                return None
+        if not raw_text:
+            await message.answer("Не удалось получить текст из голосового сообщения.")
+            return None
+        return raw_text
+
     @router.message(Command("start"))
     async def start(message: Message) -> None:
         if await reject_if_needed(message):
             return
         await message.answer(
-            "Это личный дневник фактов.\n\n"
-            "Отправьте голосовое или текстовое сообщение, а я сохраню только факты.\n\n"
+            "Это личный дневник фактов, питания и фитнеса.\n\n"
+            "Можно просто отправить сообщение, и я попробую определить тип автоматически. "
+            "Надежнее выбрать кнопку: Дневник, Питание или Фитнес, а затем отправить текст или voice.\n\n"
             "Команды:\n"
+            "/note <text> - сохранить в дневник\n"
+            "/food <text> - сохранить питание\n"
+            "/fitness <text> - сохранить фитнес\n"
             "/last - последние 5 записей\n"
             "/today - записи за сегодня\n"
             "/tags - список тегов\n"
@@ -364,6 +422,39 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         if await reject_if_needed(message):
             return
         await message.answer("\n".join(storage.get_tags()) or "Тегов пока нет.")
+
+    @router.message(Command("note"))
+    async def note_command(message: Message, command: CommandObject, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        raw_text = (command.args or "").strip()
+        if not raw_text:
+            await state.set_state(EntryModeState.waiting_for_diary)
+            await message.answer("Отправьте текст или voice для дневника.")
+            return
+        await process_text(message, raw_text, "text", "diary")
+
+    @router.message(Command("food"))
+    async def food_command(message: Message, command: CommandObject, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        raw_text = (command.args or "").strip()
+        if not raw_text:
+            await state.set_state(EntryModeState.waiting_for_nutrition)
+            await message.answer("Отправьте текст или voice с питанием.")
+            return
+        await process_text(message, raw_text, "text", "nutrition")
+
+    @router.message(Command("fitness"))
+    async def fitness_command(message: Message, command: CommandObject, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        raw_text = (command.args or "").strip()
+        if not raw_text:
+            await state.set_state(EntryModeState.waiting_for_fitness)
+            await message.answer("Отправьте текст или voice с фитнес-активностью.")
+            return
+        await process_text(message, raw_text, "text", "fitness")
 
     @router.message(Command("profile"))
     async def profile(message: Message) -> None:
@@ -482,6 +573,27 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         await state.clear()
         await message.answer("Ввод вопроса отменен.", reply_markup=MAIN_KEYBOARD)
 
+    @router.message(F.text == DIARY_BUTTON_TEXT)
+    async def diary_button(message: Message, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.set_state(EntryModeState.waiting_for_diary)
+        await message.answer("Режим: дневник. Отправьте текст или voice для сохранения фактов.")
+
+    @router.message(F.text == NUTRITION_BUTTON_TEXT)
+    async def nutrition_button(message: Message, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.set_state(EntryModeState.waiting_for_nutrition)
+        await message.answer("Режим: питание. Отправьте текст или voice с едой или напитками.")
+
+    @router.message(F.text == FITNESS_BUTTON_TEXT)
+    async def fitness_button(message: Message, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.set_state(EntryModeState.waiting_for_fitness)
+        await message.answer("Режим: фитнес. Отправьте текст или voice с активностью.")
+
     @router.message(F.text == SEARCH_BUTTON_TEXT)
     async def search_button(message: Message, state: FSMContext) -> None:
         if await reject_if_needed(message):
@@ -500,31 +612,61 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             return
         await answer_search_query(message, query)
 
+    @router.message(EntryModeState.waiting_for_diary, F.text, ~F.text.startswith("/"))
+    async def diary_mode_text(message: Message, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.clear()
+        await process_text(message, message.text or "", "text", "diary")
+
+    @router.message(EntryModeState.waiting_for_nutrition, F.text, ~F.text.startswith("/"))
+    async def nutrition_mode_text(message: Message, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.clear()
+        await process_text(message, message.text or "", "text", "nutrition")
+
+    @router.message(EntryModeState.waiting_for_fitness, F.text, ~F.text.startswith("/"))
+    async def fitness_mode_text(message: Message, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.clear()
+        await process_text(message, message.text or "", "text", "fitness")
+
+    @router.message(EntryModeState.waiting_for_diary, F.voice)
+    async def diary_mode_voice(message: Message, bot: Bot, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.clear()
+        raw_text = await transcribe_voice_message(message, bot)
+        if raw_text:
+            await process_text(message, raw_text, "voice", "diary")
+
+    @router.message(EntryModeState.waiting_for_nutrition, F.voice)
+    async def nutrition_mode_voice(message: Message, bot: Bot, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.clear()
+        raw_text = await transcribe_voice_message(message, bot)
+        if raw_text:
+            await process_text(message, raw_text, "voice", "nutrition")
+
+    @router.message(EntryModeState.waiting_for_fitness, F.voice)
+    async def fitness_mode_voice(message: Message, bot: Bot, state: FSMContext) -> None:
+        if await reject_if_needed(message):
+            return
+        await state.clear()
+        raw_text = await transcribe_voice_message(message, bot)
+        if raw_text:
+            await process_text(message, raw_text, "voice", "fitness")
+
     @router.message(F.voice)
     async def voice(message: Message, bot: Bot) -> None:
         if await reject_if_needed(message):
             return
-        if not message.voice:
-            return
-
-        await message.answer("Голосовое получено, расшифровываю.")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            audio_path = Path(temp_dir) / "voice.ogg"
-            await bot.download(message.voice.file_id, destination=audio_path)
-            try:
-                raw_text = await diary_ai.transcribe(audio_path)
-            except Exception:
-                logger.exception("Failed to transcribe voice message")
-                await message.answer(
-                    "Не удалось расшифровать голосовое: сервис распознавания сейчас недоступен. "
-                    "Попробуйте позже или отправьте текстом."
-                )
-                return
-
-        if not raw_text:
-            await message.answer("Не удалось получить текст из голосового сообщения.")
-            return
-        await process_text(message, raw_text, "voice")
+        raw_text = await transcribe_voice_message(message, bot)
+        if raw_text:
+            await process_text(message, raw_text, "voice")
 
     @router.message(F.text)
     async def text(message: Message) -> None:

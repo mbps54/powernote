@@ -14,7 +14,8 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 - Nutrition detection with estimated calories, protein, fat, carbs, fiber, and a health score.
 - Fitness detection with weekly progress, effort score, and success percentage against profile-based targets.
 - User health profile with default targets and an interactive `/profile_setup` questionnaire.
-- Persistent `Search` button for quick questions.
+- Explicit Telegram modes with buttons for `Diary`, `Nutrition`, `Fitness`, and `Search`.
+- Auto-detection remains available when no mode is selected.
 - Local file-based storage:
   - `data/diary.log`
   - `data/diary.jsonl`
@@ -28,6 +29,9 @@ The project is designed as a self-hosted personal service. It runs with Docker C
   - `data/raw_transcripts.log`
 - Bot commands:
   - `/start` - help message.
+  - `/note <text>` - force-save text as a diary entry.
+  - `/food <text>` - force-save text as a nutrition entry.
+  - `/fitness <text>` - force-save text as a fitness entry.
   - `/last` - show the last 5 entries.
   - `/today` - show today's entries.
   - `/tags` - list known tags.
@@ -138,7 +142,18 @@ docker compose down
 
 Data is stored in the local `./data` directory.
 
-When a message contains food, PowerNote AI stores it in `nutrition.jsonl` instead of the factual diary and replies with estimated calories, protein, fat, carbs, fiber, the added health score, and today's totals. When a message contains a workout or physical activity, it stores it in `fitness.jsonl` and replies with the added activity plus this week's progress and success percentage.
+Use the Telegram mode buttons when category accuracy matters:
+
+- `Diary` makes the next text or voice message go to the factual diary.
+- `Nutrition` makes the next text or voice message go to `nutrition.jsonl`.
+- `Fitness` makes the next text or voice message go to `fitness.jsonl`.
+- `Search` asks a semantic question over diary entries.
+
+You can also use commands: `/note`, `/food`, and `/fitness`.
+
+When no mode is selected, PowerNote AI still tries to auto-detect whether a message is food, fitness, or a regular diary note. Explicit mode selection is more reliable.
+
+When a message contains food, PowerNote AI replies with estimated calories, protein, fat, carbs, fiber, the added health score, and today's totals. When a message contains a workout or physical activity, it replies with the added activity plus this week's progress and success percentage.
 
 ## Remote Deploy To Ubuntu 24.04 With Ansible
 
