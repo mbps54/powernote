@@ -142,6 +142,23 @@ def format_nutrition_totals(prefix: str, totals: dict[str, float]) -> str:
     )
 
 
+def format_nutrition_remaining(profile: UserProfile, totals: dict[str, float]) -> str:
+    calorie_target = profile.nutrition_targets.calories_kcal
+    protein_target = profile.nutrition_targets.protein_g
+    calories_left = calorie_target - totals["calories_kcal"]
+    protein_left = max(0, protein_target - totals["protein_g"])
+    calorie_text = (
+        f"осталось {calories_left:.0f} ккал"
+        if calories_left >= 0
+        else f"перебор {-calories_left:.0f} ккал"
+    )
+    return (
+        "Осталось на сегодня: "
+        f"{calorie_text} из лимита {calorie_target:.0f} ккал, "
+        f"белка добрать {protein_left:.1f} г из цели {protein_target:.0f} г"
+    )
+
+
 def format_fitness_totals(prefix: str, totals: dict[str, float]) -> str:
     return (
         f"{prefix}: "
@@ -377,6 +394,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 "Питание записано.\n"
                 f"{format_nutrition_totals('Добавлено', added)}\n"
                 f"{format_nutrition_totals('Сегодня', day)}\n"
+                f"{format_nutrition_remaining(profile, day)}\n"
                 f"Комментарий: {nutrition_entries[-1].score_reason or 'Оценка сохранена.'}"
             )
 
@@ -562,7 +580,12 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         if not entries:
             await message.answer("За сегодня питание еще не записано.")
             return
-        await message.answer(format_nutrition_totals("Питание сегодня", storage.nutrition_totals(entries)))
+        profile = storage.read_profile()
+        totals = storage.nutrition_totals(entries)
+        await message.answer(
+            f"{format_nutrition_totals('Питание сегодня', totals)}\n"
+            f"{format_nutrition_remaining(profile, totals)}"
+        )
 
     @router.message(Command("fitness_week"))
     async def fitness_week(message: Message) -> None:
