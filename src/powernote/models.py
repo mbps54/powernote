@@ -84,7 +84,7 @@ class FitnessEntry(BaseModel):
 
 class ExtractedNutritionEntry(BaseModel):
     datetime_hint: str | None = None
-    meal_name: str = "meal"
+    meal_name: str | None = "meal"
     items: list[str] = Field(default_factory=list)
     calories_kcal: float = 0
     protein_g: float = 0
@@ -92,18 +92,18 @@ class ExtractedNutritionEntry(BaseModel):
     carbs_g: float = 0
     fiber_g: float = 0
     health_score: int = Field(default=50, ge=0, le=100)
-    score_reason: str = ""
+    score_reason: str | None = ""
 
 
 class ExtractedFitnessEntry(BaseModel):
     datetime_hint: str | None = None
-    activity_type: str = "activity"
+    activity_type: str | None = "activity"
     duration_minutes: int = 0
-    intensity: str = "unknown"
+    intensity: str | None = "unknown"
     muscle_groups: list[str] = Field(default_factory=list)
     estimated_calories_kcal: float = 0
     effort_score: int = Field(default=50, ge=0, le=100)
-    score_reason: str = ""
+    score_reason: str | None = ""
 
 
 class HealthExtractionResult(BaseModel):

@@ -332,7 +332,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         nutrition_entries = [
             NutritionEntry(
                 datetime=resolve_entry_datetime(item.datetime_hint, message_datetime),
-                meal_name=item.meal_name.strip() or "meal",
+                meal_name=(item.meal_name or "").strip() or "meal",
                 items=[entry.strip() for entry in item.items if entry.strip()],
                 calories_kcal=max(item.calories_kcal, 0),
                 protein_g=max(item.protein_g, 0),
@@ -340,7 +340,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 carbs_g=max(item.carbs_g, 0),
                 fiber_g=max(item.fiber_g, 0),
                 health_score=item.health_score,
-                score_reason=item.score_reason.strip(),
+                score_reason=(item.score_reason or "").strip(),
                 source=source,
                 raw_text=raw_text,
             )
@@ -350,18 +350,18 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         fitness_entries = [
             FitnessEntry(
                 datetime=resolve_entry_datetime(item.datetime_hint, message_datetime),
-                activity_type=item.activity_type.strip() or "activity",
+                activity_type=(item.activity_type or "").strip() or "activity",
                 duration_minutes=max(item.duration_minutes, 0),
-                intensity=item.intensity.strip() or "unknown",
+                intensity=(item.intensity or "").strip() or "unknown",
                 muscle_groups=[group.strip() for group in item.muscle_groups if group.strip()],
                 estimated_calories_kcal=max(item.estimated_calories_kcal, 0),
                 effort_score=item.effort_score,
-                score_reason=item.score_reason.strip(),
+                score_reason=(item.score_reason or "").strip(),
                 source=source,
                 raw_text=raw_text,
             )
             for item in health.fitness_entries
-            if mode != "nutrition" and health.is_fitness and (item.duration_minutes > 0 or item.activity_type.strip())
+            if mode != "nutrition" and health.is_fitness and (item.duration_minutes > 0 or (item.activity_type or "").strip())
         ]
 
         if not nutrition_entries and not fitness_entries:
