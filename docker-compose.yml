@@ -8,3 +8,50 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+
+  metrics-sync:
+    build:
+      context: .
+    container_name: powernote-metrics-sync
+    restart: unless-stopped
+    command: ["powernote-metrics-sync"]
+    environment:
+      DATA_DIR: /app/data
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql://powernote:powernote_metrics@postgres:5432/powernote_metrics
+      METRICS_SYNC_INTERVAL_SECONDS: "60"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: powernote-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: powernote_metrics
+      POSTGRES_USER: powernote
+      POSTGRES_PASSWORD: powernote_metrics
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  grafana:
+    image: grafana/grafana-oss:11.5.2
+    container_name: powernote-grafana
+    restart: unless-stopped
+    ports:
+      - "65080:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

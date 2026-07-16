@@ -101,6 +101,15 @@
     mode: preserve
   notify: Rebuild Powernote service
 
+- name: Copy Grafana provisioning
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../grafana"
+    dest: "{{ powernote_project_dir }}/"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: preserve
+  notify: Recreate Powernote container
+
 - name: Copy environment file
   ansible.builtin.copy:
     src: "{{ powernote_env_file }}"

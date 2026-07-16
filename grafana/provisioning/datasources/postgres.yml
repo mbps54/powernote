@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: PowerNote Metrics
+    uid: powernote-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: powernote_metrics
+    user: powernote
+    secureJsonData:
+      password: powernote_metrics
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
