@@ -31,14 +31,21 @@ class EmbeddingRecord(BaseModel):
 
 
 class NutritionTargets(BaseModel):
-    calories_kcal: float = 1900
-    protein_g: float = 130
+    calories_kcal: float = 1800
+    protein_g: float = 120
     fat_g: float = 60
-    carbs_g: float = 180
+    carbs_g: float = 195
     fiber_g: float = 30
+    fruit_veg_g: float = 400
+    added_sugar_g: float = 35
+    ultra_processed_score: float = 20
 
 
 class FitnessTargets(BaseModel):
+    daily_active_minutes: int = 110
+    daily_active_walk_minutes: int = 60
+    daily_cardio_minutes: int = 30
+    daily_strength_minutes: int = 20
     weekly_active_minutes: int = 180
     weekly_strength_sessions: int = 3
     weekly_cardio_sessions: int = 2
@@ -63,6 +70,9 @@ class NutritionEntry(BaseModel):
     fat_g: float = 0
     carbs_g: float = 0
     fiber_g: float = 0
+    fruit_veg_g: float = 0
+    added_sugar_g: float = 0
+    ultra_processed_score: int = Field(default=0, ge=0, le=100)
     health_score: int = Field(default=50, ge=0, le=100)
     score_reason: str = ""
     source: str
@@ -91,6 +101,9 @@ class ExtractedNutritionEntry(BaseModel):
     fat_g: float = 0
     carbs_g: float = 0
     fiber_g: float = 0
+    fruit_veg_g: float = 0
+    added_sugar_g: float = 0
+    ultra_processed_score: int = Field(default=0, ge=0, le=100)
     health_score: int = Field(default=50, ge=0, le=100)
     score_reason: str | None = ""
 
