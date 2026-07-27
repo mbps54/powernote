@@ -570,6 +570,8 @@ class DiaryStorage:
                 entry.raw_text,
             ]
         ).lower()
+        if any(marker in text for marker in ("баня", "сауна", "steam", "sauna", "recovery", "восстанов")):
+            return "recovery"
         if any(marker in text for marker in ("strength", "сил", "gym", "зал", "weights", "гантел", "штанг", "отжим", "присед")):
             return "strength"
         if any(marker in text for marker in ("active_walk", "walk", "walking", "прогул", "ходь", "пеш")):
@@ -595,7 +597,11 @@ class DiaryStorage:
             elif category == "cardio":
                 cardio_minutes += entry.duration_minutes
 
-        active_minutes = sum(entry.duration_minutes for entry in entries)
+        active_minutes = active_walk_minutes + cardio_minutes + strength_minutes + sum(
+            entry.duration_minutes
+            for entry in entries
+            if cls.fitness_activity_category(entry) == "activity"
+        )
         effort_score = (
             sum(entry.effort_score for entry in entries) / len(entries)
             if entries
@@ -761,17 +767,17 @@ class DiaryStorage:
         nutrition_entries = self.read_nutrition_entries()
         fitness_entries = self.read_fitness_entries()
 
-        candidates: list[tuple[int, str]] = []
+        candidates: list[tuple[datetime, int, str]] = []
         if diary_entries:
-            candidates.append((self.diary_jsonl_path.stat().st_mtime_ns, "diary"))
+            candidates.append((diary_entries[-1].datetime, len(diary_entries), "diary"))
         if nutrition_entries:
-            candidates.append((self.nutrition_jsonl_path.stat().st_mtime_ns, "nutrition"))
+            candidates.append((nutrition_entries[-1].datetime, len(nutrition_entries), "nutrition"))
         if fitness_entries:
-            candidates.append((self.fitness_jsonl_path.stat().st_mtime_ns, "fitness"))
+            candidates.append((fitness_entries[-1].datetime, len(fitness_entries), "fitness"))
         if not candidates:
             return None
 
-        kind = max(candidates)[1]
+        kind = max(candidates)[2]
         if kind == "diary":
             entries = diary_entries
             path = self.diary_jsonl_path

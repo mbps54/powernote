@@ -14,6 +14,7 @@ from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from .ai import DiaryAI
 from .config import Settings
+from .entry_datetime import explicit_entry_datetime
 from .models import DiaryEntry, FitnessEntry, NutritionEntry, UserProfile
 from .storage import DiaryStorage, nutrition_quality_metadata_present
 
@@ -61,17 +62,20 @@ class ProfileSetupState(StatesGroup):
     waiting_for_goal = State()
 
 
-def resolve_entry_datetime(datetime_hint: str | None, fallback: datetime) -> datetime:
-    if not datetime_hint:
-        return fallback
-    try:
-        resolved = datetime.fromisoformat(datetime_hint.replace("Z", "+00:00"))
-    except ValueError:
-        logger.warning("Ignoring invalid datetime_hint from AI: %s", datetime_hint)
-        return fallback
-    if resolved.tzinfo is None:
-        return resolved.replace(tzinfo=fallback.tzinfo)
-    return resolved.astimezone(fallback.tzinfo)
+def resolve_entry_datetime(datetime_hint: str | None, fallback: datetime, raw_text: str = "") -> datetime:
+    resolved = fallback
+    if datetime_hint:
+        try:
+            resolved = datetime.fromisoformat(datetime_hint.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Ignoring invalid datetime_hint from AI: %s", datetime_hint)
+        else:
+            if resolved.tzinfo is None:
+                resolved = resolved.replace(tzinfo=fallback.tzinfo)
+            else:
+                resolved = resolved.astimezone(fallback.tzinfo)
+
+    return explicit_entry_datetime(raw_text, fallback) or resolved
 
 
 def floor_to_quarter_hour(value: datetime) -> datetime:
@@ -201,70 +205,24 @@ def format_nutrition_summary(entries: list[NutritionEntry]) -> str:
     return summary or "еда"
 
 
-def format_nutrition_comment(
-    profile: UserProfile,
-    added: dict[str, float],
-    day: dict[str, float],
-    entries: list[NutritionEntry],
-    meal_datetime: datetime,
-) -> str:
-    parts: list[str] = []
-    hour = meal_datetime.hour
-    protein_left = profile.nutrition_targets.protein_g - day["protein_g"]
-    fiber_left = profile.nutrition_targets.fiber_g - day["fiber_g"]
-    calories_left = profile.nutrition_targets.calories_kcal - day["calories_kcal"]
-    fruit_veg_left = profile.nutrition_targets.fruit_veg_g - day["fruit_veg_g"]
-    items_text = " ".join(item.lower() for entry in entries for item in entry.items)
-    raw_text = " ".join(entry.raw_text.lower() for entry in entries)
-    combined_text = f"{items_text} {raw_text}"
+def format_nutrition_items(entries: list[NutritionEntry]) -> str:
+    items = [item.strip() for entry in entries for item in entry.items if item.strip()]
+    if not items:
+        fallback = " ".join(entries[-1].raw_text.split()) if entries else "еда"
+        items = [fallback]
+    return "\n".join(f"- {item}" for item in items)
 
-    if added["protein_g"] >= 25:
-        parts.append("хорошая белковая часть")
-    elif added["protein_g"] >= 12:
-        parts.append("белок есть, но порция умеренная")
-    else:
-        parts.append("белка мало")
 
-    if added["fiber_g"] >= 6:
-        parts.append("клетчатка хорошая")
-    elif added["fiber_g"] >= 3:
-        parts.append("клетчатка средняя")
-    else:
-        parts.append("клетчатки мало")
-
-    if added["fruit_veg_g"] >= 150:
-        parts.append("овощей/фруктов хорошая порция")
-    elif added["fruit_veg_g"] >= 50:
-        parts.append("овощи/фрукты есть, но немного")
-    elif fruit_veg_left > 250:
-        parts.append("овощей/фруктов за день мало")
-
-    if any(marker in combined_text for marker in ("овощ", "салат", "зелень", "ягод", "фрукт", "суп", "греч", "овсян")):
-        parts.append("качество еды скорее хорошее")
-    if added["added_sugar_g"] > 12 or any(marker in combined_text for marker in ("чипс", "сахар", "шоколад", "печень", "конфет", "кола", "алког", "фастфуд")):
-        parts.append("есть продукт, снижающий качество приема")
-    if added["ultra_processed_score"] >= 60:
-        parts.append("еда заметно обработанная")
-
-    if hour >= 21 and added["calories_kcal"] > 500:
-        parts.append("для позднего времени объем тяжеловат")
-    elif hour >= 21:
-        parts.append("для позднего времени объем спокойный")
-    elif 6 <= hour <= 11 and added["protein_g"] < 15:
-        parts.append("для утра белка лучше больше")
-
-    if protein_left > 35:
-        parts.append(f"за день белок сильно ниже цели: осталось {protein_left:.0f}")
-    elif protein_left > 0:
-        parts.append(f"до цели белка осталось {protein_left:.0f}")
-    if fiber_left > 10:
-        parts.append(f"клетчатка за день низкая: осталось {fiber_left:.0f}")
-    if calories_left < 0:
-        parts.append(f"калории уже выше цели на {-calories_left:.0f}")
-    elif calories_left < 250:
-        parts.append(f"калорийный запас небольшой: {calories_left:.0f}")
-
-    return "Комментарий: " + "; ".join(parts[:5]) + "."
+def format_meal_assessment(entries: list[NutritionEntry]) -> str:
+    reasons = list(
+        dict.fromkeys(
+            reason
+            for entry in entries
+            if (reason := entry.score_reason.strip())
+        )
+    )
+    assessment = " ".join(reasons) or "Прием пищи сохранен; для точной оценки состава недостаточно данных."
+    return f"Оценка приема: {assessment}"
 
 
 def format_nutrition_meals(entries: list[NutritionEntry]) -> str:
@@ -346,7 +304,7 @@ def format_daily_nutrition_assessment(profile: UserProfile, totals: dict[str, fl
     if late_calories > 500:
         parts.append("поздний объем еды великоват")
 
-    return "Итоговая оценка: " + "; ".join(parts[:6]) + "."
+    return "Оценка дня: " + "; ".join(parts[:6]) + "."
 
 
 def format_fitness_totals(prefix: str, totals: dict[str, float]) -> str:
@@ -559,7 +517,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
 
         nutrition_entries = [
             NutritionEntry(
-                datetime=floor_to_quarter_hour(resolve_entry_datetime(item.datetime_hint, message_datetime)),
+                datetime=floor_to_quarter_hour(resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text)),
                 meal_name=(item.meal_name or "").strip() or "meal",
                 items=[entry.strip() for entry in item.items if entry.strip()],
                 calories_kcal=max(item.calories_kcal, 0),
@@ -580,7 +538,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         ]
         fitness_entries = [
             FitnessEntry(
-                datetime=resolve_entry_datetime(item.datetime_hint, message_datetime),
+                datetime=resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text),
                 activity_type=(item.activity_type or "").strip() or "activity",
                 duration_minutes=max(item.duration_minutes, 0),
                 intensity=(item.intensity or "").strip() or "unknown",
@@ -606,24 +564,28 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             day_entries = storage.nutrition_for_date(meal_datetime.date())
             day = storage.nutrition_totals(day_entries)
             day["health_score"] = storage.daily_nutrition_score(day_entries, day, profile)
-            meal_summary = format_nutrition_summary(nutrition_entries)
+            day_prefix = "Сегодня" if meal_datetime.date() == message_datetime.date() else f"За {meal_datetime:%d.%m}"
             chunks.append(
-                f"Питание записано: {meal_summary}\n"
+                "Питание записано:\n"
+                f"{format_nutrition_items(nutrition_entries)}\n\n"
                 f"{format_nutrition_totals('Добавлено', added)}\n"
-                f"{format_nutrition_totals('Сегодня', day)}\n"
+                f"{format_nutrition_totals(day_prefix, day)}\n"
                 f"{format_nutrition_remaining(profile, day)}\n"
-                f"{format_nutrition_comment(profile, added, day, nutrition_entries, meal_datetime)}"
+                f"{format_meal_assessment(nutrition_entries)}\n"
+                f"{format_daily_nutrition_assessment(profile, day, day_entries)}"
             )
 
         if fitness_entries:
             storage.append_fitness_entries(fitness_entries)
             added_fitness = storage.fitness_daily_totals(fitness_entries, profile)
-            day_entries = storage.fitness_for_date(message_datetime.date())
+            fitness_datetime = fitness_entries[-1].datetime
+            day_entries = storage.fitness_for_date(fitness_datetime.date())
             day = storage.fitness_daily_totals(day_entries, profile)
+            day_prefix = "Сегодня" if fitness_datetime.date() == message_datetime.date() else f"За {fitness_datetime:%d.%m}"
             chunks.append(
                 "Фитнес записан.\n"
                 f"{format_fitness_totals('Добавлено', added_fitness)}\n"
-                f"{format_fitness_totals('Сегодня', day)}\n"
+                f"{format_fitness_totals(day_prefix, day)}\n"
                 f"Комментарий: {fitness_entries[-1].score_reason or 'Оценка сохранена.'}"
             )
 
@@ -660,7 +622,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
 
         entries = [
             DiaryEntry(
-                datetime=resolve_entry_datetime(item.datetime_hint, message_datetime),
+                datetime=resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text),
                 tags=[tag.strip().lower() for tag in item.tags if tag.strip()],
                 facts=[fact.strip() for fact in item.facts if fact.strip()],
                 source=source,
