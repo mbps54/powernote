@@ -1007,7 +1007,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "select day::timestamp as \"time\", active_walk_minutes as \"Walk\", cardio_minutes as \"Cardio\", strength_minutes as \"Strength\" from fitness_daily where $__timeFilter(day::timestamp) order by 1",
+          "rawSql": "select days.day::timestamp as \"time\", coalesce(f.active_walk_minutes, 0) as \"Walk\", coalesce(f.cardio_minutes, 0) as \"Cardio\", coalesce(f.strength_minutes, 0) as \"Strength\" from generate_series($__timeFrom()::date, least($__timeTo()::date, current_date), interval '1 day') as days(day) left join fitness_daily f on f.day = days.day::date order by 1",
           "refId": "A"
         }
       ],
@@ -1130,7 +1130,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "select day::timestamp as \"time\", health_score as \"Activity Health Score\", 80 as \"Target\" from fitness_daily where $__timeFilter(day::timestamp) order by 1",
+          "rawSql": "select days.day::timestamp as \"time\", coalesce(f.health_score, 0) as \"Activity Health Score\", 80 as \"Target\" from generate_series($__timeFrom()::date, least($__timeTo()::date, current_date), interval '1 day') as days(day) left join fitness_daily f on f.day = days.day::date order by 1",
           "refId": "A"
         }
       ],
