@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -22,11 +23,12 @@ logger = logging.getLogger(__name__)
 
 EntryMode = Literal["auto", "diary", "nutrition", "fitness"]
 
-DIARY_BUTTON_TEXT = "Дневник"
-NUTRITION_BUTTON_TEXT = "Питание"
-FITNESS_BUTTON_TEXT = "Фитнес"
-SEARCH_BUTTON_TEXT = "Поиск"
-UNDO_BUTTON_TEXT = "Удалить последнее"
+DIARY_BUTTON_TEXT = "Diary"
+NUTRITION_BUTTON_TEXT = "Nutrition"
+FITNESS_BUTTON_TEXT = "Fitness"
+NUTRITION_TODAY_BUTTON_TEXT = "Nutrition Today"
+SEARCH_BUTTON_TEXT = "Search"
+UNDO_BUTTON_TEXT = "Delete Last"
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -36,6 +38,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         ],
         [
             KeyboardButton(text=SEARCH_BUTTON_TEXT),
+            KeyboardButton(text=NUTRITION_TODAY_BUTTON_TEXT),
             KeyboardButton(text=UNDO_BUTTON_TEXT),
         ],
     ],
@@ -146,7 +149,7 @@ def format_profile(profile: UserProfile) -> str:
         f"- добавленный сахар: до {profile.nutrition_targets.added_sugar_g:g} г\n\n"
         "Цели активности в день:\n"
         f"- всего: {profile.fitness_targets.daily_active_minutes} мин\n"
-        f"- active walk: {profile.fitness_targets.daily_active_walk_minutes} мин\n"
+        f"- прогулка: {profile.fitness_targets.daily_active_walk_minutes} мин\n"
         f"- кардио: {profile.fitness_targets.daily_cardio_minutes} мин\n"
         f"- силовые: {profile.fitness_targets.daily_strength_minutes} мин"
     )
@@ -236,8 +239,18 @@ def format_nutrition_meals(entries: list[NutritionEntry]) -> str:
     return "\n".join(lines)
 
 
-def format_daily_nutrition_assessment(profile: UserProfile, totals: dict[str, float], entries: list[NutritionEntry]) -> str:
+def format_daily_nutrition_assessment(
+    profile: UserProfile,
+    totals: dict[str, float],
+    entries: list[NutritionEntry],
+    as_of: datetime | None = None,
+) -> str:
     parts: list[str] = []
+    target_date = entries[-1].datetime.date()
+    day_progress = DiaryStorage.nutrition_day_progress(target_date, as_of)
+    protein_progress_ratio = totals["protein_g"] / max(profile.nutrition_targets.protein_g * day_progress, 1)
+    fiber_progress_ratio = totals["fiber_g"] / max(profile.nutrition_targets.fiber_g * max(0.25, day_progress * 0.85), 1)
+    fruit_veg_progress_ratio = totals["fruit_veg_g"] / max(profile.nutrition_targets.fruit_veg_g * day_progress, 1)
     protein_left = profile.nutrition_targets.protein_g - totals["protein_g"]
     fiber_left = profile.nutrition_targets.fiber_g - totals["fiber_g"]
     calories_left = profile.nutrition_targets.calories_kcal - totals["calories_kcal"]
@@ -252,21 +265,54 @@ def format_daily_nutrition_assessment(profile: UserProfile, totals: dict[str, fl
     )
     late_calories = sum(entry.calories_kcal for entry in entries if entry.datetime.hour >= 21)
 
-    if totals["health_score"] >= 75:
+    if day_progress < 0.45:
+        if totals["health_score"] >= 75:
+            parts.append("хорошее начало дня")
+        elif totals["health_score"] >= 60:
+            parts.append("начало дня среднее")
+        else:
+            parts.append("начало дня можно улучшить")
+    elif day_progress < 0.9:
+        if totals["health_score"] >= 75:
+            parts.append("к этому времени питание идет хорошо")
+        elif totals["health_score"] >= 60:
+            parts.append("к этому времени качество питания среднее")
+        else:
+            parts.append("к этому времени питание стоит улучшить")
+    elif totals["health_score"] >= 75:
         parts.append("день по качеству хороший")
     elif totals["health_score"] >= 60:
         parts.append("день средний по качеству")
     else:
         parts.append("качество дня слабое")
 
-    if protein_left > 35:
+    if late_calories >= 700:
+        parts.append("слишком большой объем еды после 21:00 заметно снижает оценку")
+    elif late_calories >= 400:
+        parts.append("поздний объем еды великоват и снижает оценку")
+    elif late_calories >= 200:
+        parts.append("был заметный поздний прием пищи")
+
+    if day_progress < 0.9 and protein_progress_ratio >= 0.8:
+        parts.append("белок идет по плану")
+    elif day_progress < 0.9 and protein_progress_ratio >= 0.6:
+        parts.append("темп по белку немного ниже плана")
+    elif day_progress < 0.9:
+        parts.append("к этому времени белка мало")
+    elif protein_left > 35:
         parts.append(f"сильно не хватает белка: осталось {protein_left:.0f}")
     elif protein_left > 0:
         parts.append(f"белок ниже цели на {protein_left:.0f}")
     else:
         parts.append("цель по белку закрыта")
 
-    if fiber_left > 10:
+    if day_progress < 0.9 and fiber_progress_ratio >= 0.8:
+        parts.append("клетчатка идет по плану")
+    elif day_progress < 0.9 and fiber_progress_ratio >= 0.6:
+        parts.append("темп по клетчатке немного ниже плана")
+    elif day_progress < 0.9:
+        parts.append("к этому времени клетчатки мало")
+    elif fiber_left > 10:
         parts.append(f"клетчатка низкая: осталось {fiber_left:.0f}")
     elif fiber_left > 0:
         parts.append(f"клетчатку можно добрать: {fiber_left:.0f}")
@@ -280,8 +326,17 @@ def format_daily_nutrition_assessment(profile: UserProfile, totals: dict[str, fl
     else:
         parts.append(f"калорий осталось {calories_left:.0f}")
 
+    if re.search(r"\b(?:сок(?:а|ом|и)?|juice)\b", combined_text, re.IGNORECASE):
+        parts.append("сок дает свободные сахара без клетчатки; цельный фрукт качественнее")
+
     if any(nutrition_quality_metadata_present(entry) for entry in entries):
-        if fruit_veg_left > 150:
+        if day_progress < 0.9 and fruit_veg_progress_ratio >= 0.8:
+            parts.append("овощи/фрукты идут по плану")
+        elif day_progress < 0.9 and fruit_veg_progress_ratio >= 0.6:
+            parts.append("темп по овощам/фруктам немного ниже плана")
+        elif day_progress < 0.9:
+            parts.append("к этому времени овощей/фруктов мало")
+        elif fruit_veg_left > 150:
             parts.append(f"овощей/фруктов мало: осталось {fruit_veg_left:.0f}")
         elif fruit_veg_left > 0:
             parts.append(f"овощи/фрукты почти добраны: осталось {fruit_veg_left:.0f}")
@@ -301,10 +356,30 @@ def format_daily_nutrition_assessment(profile: UserProfile, totals: dict[str, fl
     elif any(marker in combined_text for marker in ("овощ", "салат", "зелень", "ягод", "фрукт", "суп", "греч", "овсян", "рыб", "куриц")):
         parts.append("по составу есть качественная еда")
 
-    if late_calories > 500:
-        parts.append("поздний объем еды великоват")
-
     return "Оценка дня: " + "; ".join(parts[:6]) + "."
+
+
+FITNESS_CATEGORY_LABELS = {
+    "active_walk": "прогулка",
+    "cardio": "кардио",
+    "strength": "силовая",
+    "recovery": "восстановление",
+    "activity": "активность",
+}
+
+
+def format_fitness_entries(entries: list[FitnessEntry]) -> str:
+    lines: list[str] = []
+    for entry in entries:
+        category = DiaryStorage.fitness_activity_category(entry)
+        label = FITNESS_CATEGORY_LABELS.get(category, category)
+        lines.append(f"- {label}: {entry.duration_minutes} мин")
+    return "\n".join(lines)
+
+
+def format_fitness_comment(entries: list[FitnessEntry]) -> str:
+    reasons = list(dict.fromkeys(entry.score_reason.strip() for entry in entries if entry.score_reason.strip()))
+    return " ".join(reasons) or "Активность сохранена."
 
 
 def format_fitness_totals(prefix: str, totals: dict[str, float]) -> str:
@@ -563,7 +638,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             meal_datetime = nutrition_entries[-1].datetime
             day_entries = storage.nutrition_for_date(meal_datetime.date())
             day = storage.nutrition_totals(day_entries)
-            day["health_score"] = storage.daily_nutrition_score(day_entries, day, profile)
+            day["health_score"] = storage.daily_nutrition_score(day_entries, day, profile, message_datetime)
             day_prefix = "Сегодня" if meal_datetime.date() == message_datetime.date() else f"За {meal_datetime:%d.%m}"
             chunks.append(
                 "Питание записано:\n"
@@ -572,7 +647,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 f"{format_nutrition_totals(day_prefix, day)}\n"
                 f"{format_nutrition_remaining(profile, day)}\n"
                 f"{format_meal_assessment(nutrition_entries)}\n"
-                f"{format_daily_nutrition_assessment(profile, day, day_entries)}"
+                f"{format_daily_nutrition_assessment(profile, day, day_entries, message_datetime)}"
             )
 
         if fitness_entries:
@@ -583,10 +658,11 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             day = storage.fitness_daily_totals(day_entries, profile)
             day_prefix = "Сегодня" if fitness_datetime.date() == message_datetime.date() else f"За {fitness_datetime:%d.%m}"
             chunks.append(
-                "Фитнес записан.\n"
+                "Фитнес записан:\n"
+                f"{format_fitness_entries(fitness_entries)}\n\n"
                 f"{format_fitness_totals('Добавлено', added_fitness)}\n"
                 f"{format_fitness_totals(day_prefix, day)}\n"
-                f"Комментарий: {fitness_entries[-1].score_reason or 'Оценка сохранена.'}"
+                f"Комментарий: {format_fitness_comment(fitness_entries)}"
             )
 
         await message.answer("\n\n".join(chunks))
@@ -762,13 +838,14 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             return
         profile = storage.read_profile()
         totals = storage.nutrition_totals(entries)
-        totals["health_score"] = storage.daily_nutrition_score(entries, totals, profile)
+        report_datetime = datetime.now(settings.timezone)
+        totals["health_score"] = storage.daily_nutrition_score(entries, totals, profile, report_datetime)
         await message.answer(
             f"{format_nutrition_meals(entries)}\n\n"
             f"{format_nutrition_totals('Итого', totals)}\n"
             f"{format_nutrition_remaining(profile, totals)}\n"
             f"{format_nutrition_quality_factors(profile, totals)}\n"
-            f"{format_daily_nutrition_assessment(profile, totals, entries)}"
+            f"{format_daily_nutrition_assessment(profile, totals, entries, report_datetime)}"
         )
 
     @router.message(Command("fitness_week"))
@@ -899,6 +976,11 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             return
         await state.set_state(EntryModeState.waiting_for_fitness)
         await message.answer("Режим: фитнес. Отправьте текст или voice с активностью.")
+
+    @router.message(F.text == NUTRITION_TODAY_BUTTON_TEXT)
+    async def nutrition_today_button(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await nutrition_today(message)
 
     @router.message(F.text == SEARCH_BUTTON_TEXT)
     async def search_button(message: Message, state: FSMContext) -> None:

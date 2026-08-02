@@ -6,6 +6,7 @@ import time
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import psycopg
 
@@ -77,6 +78,7 @@ def ensure_schema(connection: psycopg.Connection) -> None:
 def sync_once(storage: DiaryStorage, connection: psycopg.Connection) -> None:
     storage.ensure_initialized()
     profile = storage.read_profile()
+    report_datetime = datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "Europe/Berlin")))
 
     nutrition_by_day: dict[date, list[NutritionEntry]] = defaultdict(list)
     for entry in storage.read_nutrition_entries():
@@ -90,7 +92,7 @@ def sync_once(storage: DiaryStorage, connection: psycopg.Connection) -> None:
         cursor.execute("truncate table nutrition_daily")
         for day, entries in sorted(nutrition_by_day.items()):
             totals = storage.nutrition_totals(entries)
-            quality_score = storage.daily_nutrition_score(entries, totals, profile)
+            quality_score = storage.daily_nutrition_score(entries, totals, profile, report_datetime)
             cursor.execute(
                 """
                 insert into nutrition_daily (

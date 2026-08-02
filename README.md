@@ -12,7 +12,7 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 - Fact and tag extraction via OpenAI with structured JSON output.
 - Semantic question answering over diary entries using embeddings and an LLM.
 - Nutrition detection with estimated calories, protein, fat, carbs, fiber, fruit/vegetable intake, added sugar, ultra-processed food score, and a daily quality score.
-- Fitness detection with daily active walk, cardio, strength, and activity health score tracking.
+- Fitness detection with daily walk, cardio, strength, and activity health score tracking.
 - Grafana dashboard for nutrition and fitness trends.
 - User health profile with default targets and an interactive `/profile_setup` questionnaire.
 - Explicit Telegram modes with buttons for `Diary`, `Nutrition`, `Fitness`, and `Search`.
@@ -158,7 +158,7 @@ You can also use commands: `/note`, `/food`, and `/fitness`.
 
 When no mode is selected, PowerNote AI still tries to auto-detect whether a message is food, fitness, or a regular diary note. Auto mode uses simple local keyword routing before asking the LLM, so obvious food or workout messages are less likely to be saved to the factual diary by mistake. Explicit mode selection is still the most reliable option.
 
-When a message contains food, PowerNote AI replies with estimated calories, protein, fiber, the added meal score, and today's totals. Daily nutrition quality also accounts for calories, protein, fiber, fruit/vegetable intake, added sugar, and ultra-processed food. When a message contains a workout or physical activity, it replies with today's active walk, cardio, strength, and activity health score.
+When a message contains food, PowerNote AI replies with estimated calories, protein, fiber, the added meal score, and today's totals. Daily nutrition quality also accounts for calories, protein, fiber, fruit/vegetable intake, added sugar, and ultra-processed food. When a message contains a workout or physical activity, it replies with today's walk, cardio, strength, and activity health score.
 
 If a voice transcription or automatic classification is wrong, use `/undo_last` or the `Удалить последнее` Telegram button. PowerNote AI removes the latest saved entry group from diary, nutrition, or fitness JSONL storage.
 
@@ -181,7 +181,7 @@ The dashboard shows:
 - daily fruit and vegetable intake vs target;
 - daily added sugar vs limit;
 - daily ultra-processed food score vs limit;
-- daily activity minutes split into active walk, cardio, and strength, with a daily target;
+- daily activity minutes split into walk, cardio, and strength, with a daily target;
 - daily activity health score.
 
 Nutrition and activity are displayed daily so the dashboard stays focused on the current weight-loss workflow: food quality, calories, protein, fiber, fruit and vegetables, added sugar, ultra-processed food, and same-day movement.

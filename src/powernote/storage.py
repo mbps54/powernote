@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -90,6 +91,12 @@ ULTRA_PROCESSED_HINTS = (
     "колбас",
     "пиво",
     "алког",
+)
+
+FRUIT_JUICE_RE = re.compile(r"\b(?:сок(?:а|ом|и)?|juice)\b", re.IGNORECASE)
+SWEETENED_JUICE_RE = re.compile(
+    r"\b(?:нектар(?!ин)|сокосодержащ\w*|juice drink)\b",
+    re.IGNORECASE,
 )
 
 
@@ -343,6 +350,16 @@ class DiaryStorage:
         elif entry.calories_kcal < 150 and entry.protein_g < 10:
             score -= 4
 
+        if entry.datetime.hour >= 21:
+            if entry.calories_kcal >= 600:
+                score -= 10
+            elif entry.calories_kcal >= 350:
+                score -= 7
+            elif entry.calories_kcal >= 150:
+                score -= 3
+            if entry.datetime.hour >= 23 and entry.calories_kcal >= 100:
+                score -= 2
+
         text = cls.text_for_nutrition([entry])
         low_quality_hints = LOW_QUALITY_FOOD_HINTS
         if entry.added_sugar_g <= 8:
@@ -350,6 +367,13 @@ class DiaryStorage:
 
         score += min(5, sum(1 for hint in NATURAL_FOOD_HINTS if hint in text) * 1.5)
         score -= min(10, sum(1 for hint in low_quality_hints if hint in text) * 3)
+
+        if FRUIT_JUICE_RE.search(text):
+            score -= 5
+            if entry.fiber_g < 2:
+                score -= 2
+            if SWEETENED_JUICE_RE.search(text):
+                score -= 6
 
         calibrated_score = entry.health_score * 0.35 + score * 0.65
         return clamp(calibrated_score)
@@ -410,23 +434,56 @@ class DiaryStorage:
         ).lower()
 
     @classmethod
+    def nutrition_day_progress(cls, target_date: date, as_of: datetime | None = None) -> float:
+        if as_of is None or target_date != as_of.date():
+            return 1.0
+
+        hour = as_of.hour + as_of.minute / 60
+        anchors = (
+            (0.0, 0.25),
+            (10.0, 0.35),
+            (14.0, 0.60),
+            (18.0, 0.80),
+            (21.0, 0.95),
+            (23.0, 1.00),
+        )
+        for (start_hour, start_progress), (end_hour, end_progress) in zip(anchors, anchors[1:]):
+            if hour <= end_hour:
+                position = (hour - start_hour) / (end_hour - start_hour)
+                return start_progress + max(0, position) * (end_progress - start_progress)
+        return 1.0
+
+    @classmethod
     def daily_nutrition_score(
         cls,
         entries: list[NutritionEntry],
         totals: dict[str, float],
         profile: UserProfile,
+        as_of: datetime | None = None,
     ) -> float:
         if not entries:
             return 0
 
         calories = totals["calories_kcal"]
-        protein_ratio = totals["protein_g"] / max(profile.nutrition_targets.protein_g, 1)
-        fiber_ratio = totals["fiber_g"] / max(profile.nutrition_targets.fiber_g, 1)
-        fruit_veg_ratio = totals["fruit_veg_g"] / max(profile.nutrition_targets.fruit_veg_g, 1)
+        target_date = entries[-1].datetime.date()
+        day_progress = cls.nutrition_day_progress(target_date, as_of)
+        fiber_progress = max(0.25, day_progress * 0.85)
+        protein_ratio = totals["protein_g"] / max(profile.nutrition_targets.protein_g * day_progress, 1)
+        fiber_ratio = totals["fiber_g"] / max(profile.nutrition_targets.fiber_g * fiber_progress, 1)
+        fruit_veg_ratio = totals["fruit_veg_g"] / max(profile.nutrition_targets.fruit_veg_g * day_progress, 1)
         sugar_ratio = totals["added_sugar_g"] / max(profile.nutrition_targets.added_sugar_g, 1)
-        calorie_ratio = calories / max(profile.nutrition_targets.calories_kcal, 1)
+        calorie_ratio = calories / max(profile.nutrition_targets.calories_kcal * day_progress, 1)
         weighted_entry_score = totals["health_score"]
         has_quality_metadata = any(nutrition_quality_metadata_present(entry) for entry in entries)
+        late_calories = sum(entry.calories_kcal for entry in entries if entry.datetime.hour >= 21)
+        if late_calories >= 700:
+            late_penalty = 8
+        elif late_calories >= 400:
+            late_penalty = 5
+        elif late_calories >= 200:
+            late_penalty = 3
+        else:
+            late_penalty = 0
 
         if not has_quality_metadata:
             score = weighted_entry_score * 0.35 + 35
@@ -459,6 +516,9 @@ class DiaryStorage:
             text = cls.text_for_nutrition(entries)
             score += min(8, sum(1 for hint in NATURAL_FOOD_HINTS if hint in text) * 2)
             score -= min(18, sum(1 for hint in LOW_QUALITY_FOOD_HINTS if hint in text) * 5)
+            score -= late_penalty
+            if day_progress < 1:
+                score = min(score, 80 + day_progress * 20)
             return clamp(score)
 
         score = weighted_entry_score * 0.25 + 35
@@ -518,6 +578,9 @@ class DiaryStorage:
         text = cls.text_for_nutrition(entries)
         score += min(6, sum(1 for hint in NATURAL_FOOD_HINTS if hint in text) * 1.5)
         score -= min(10, sum(1 for hint in LOW_QUALITY_FOOD_HINTS if hint in text) * 3)
+        score -= late_penalty
+        if day_progress < 1:
+            score = min(score, 80 + day_progress * 20)
         return clamp(score)
 
     @staticmethod
@@ -562,21 +625,40 @@ class DiaryStorage:
 
     @staticmethod
     def fitness_activity_category(entry: FitnessEntry) -> str:
-        text = " ".join(
+        activity_type = entry.activity_type.strip().lower()
+        if activity_type in {"recovery", "восстановление"}:
+            return "recovery"
+        if activity_type in {"strength", "силовая", "силовые"}:
+            return "strength"
+        if activity_type in {"active_walk", "active walk", "активная прогулка"}:
+            return "active_walk"
+        if activity_type in {"cardio", "кардио"}:
+            return "cardio"
+
+        type_markers = (
+            ("recovery", ("recovery", "восстанов")),
+            ("strength", ("strength", "сил", "gym", "зал", "weights", "гантел", "штанг")),
+            ("active_walk", ("active_walk", "active walk", "walking", "прогул", "ходь", "пеш")),
+            ("cardio", ("cardio", "кардио", "run", "бег", "bike", "bicycle", "вел", "плав", "swim")),
+        )
+        for category, markers in type_markers:
+            if any(marker in activity_type for marker in markers):
+                return category
+
+        fallback_text = " ".join(
             [
-                entry.activity_type,
                 entry.intensity,
                 " ".join(entry.muscle_groups),
                 entry.raw_text,
             ]
         ).lower()
-        if any(marker in text for marker in ("баня", "сауна", "steam", "sauna", "recovery", "восстанов")):
+        if any(marker in fallback_text for marker in ("баня", "сауна", "steam", "sauna", "recovery", "восстанов")):
             return "recovery"
-        if any(marker in text for marker in ("strength", "сил", "gym", "зал", "weights", "гантел", "штанг", "отжим", "присед")):
+        if any(marker in fallback_text for marker in ("strength", "сил", "gym", "зал", "weights", "гантел", "штанг", "отжим", "присед")):
             return "strength"
-        if any(marker in text for marker in ("active_walk", "walk", "walking", "прогул", "ходь", "пеш")):
+        if any(marker in fallback_text for marker in ("active_walk", "walk", "walking", "прогул", "ходь", "пеш")):
             return "active_walk"
-        if any(marker in text for marker in ("run", "бег", "bike", "bicycle", "вел", "cardio", "кардио", "плав", "swim")):
+        if any(marker in fallback_text for marker in ("run", "бег", "bike", "bicycle", "вел", "cardio", "кардио", "плав", "swim")):
             return "cardio"
         return "activity"
 
