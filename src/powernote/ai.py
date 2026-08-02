@@ -15,7 +15,7 @@ SYSTEM_PROMPT = """Ты модуль личного дневника факто�
 
 Не добавляй интерпретации. Не делай психологических выводов. Не превращай предположения пользователя в установленные факты. Если пользователь говорит "кажется", "возможно", "я думаю", сохрани это как предположение пользователя.
 
-Разделяй разные темы на отдельные записи. Для каждой записи выбери подходящие теги из списка существующих тегов. Новый тег создай только если ни один существующий тег не подходит.
+Разделяй разные темы на отдельные записи.
 
 Правила:
 1. Извлекай только факты и явно сказанные события.
@@ -25,20 +25,17 @@ SYSTEM_PROMPT = """Ты модуль личного дневника факто�
 5. Сохраняй неопределенность как предположение пользователя.
 6. Не превращай эмоции в факты о других людях.
 7. Если фактов нет, верни пустой массив entries.
-8. Теги должны быть на русском языке, в нижнем регистре, без эмодзи, одно-два слова максимум.
-9. Для "сегодня", "вчера" и явно названных дат вычисли дату относительно message_datetime.
-10. datetime_hint верни в ISO 8601 с часовым поясом. Если дата факта не отличается от даты сообщения, верни null.
+8. Для "сегодня", "вчера" и явно названных дат вычисли дату относительно message_datetime.
+9. datetime_hint верни в ISO 8601 с часовым поясом. Если дата факта не отличается от даты сообщения, верни null.
 
 Верни строго JSON без markdown:
 {
   "entries": [
     {
       "datetime_hint": null,
-      "tags": ["семья"],
       "facts": ["Пользователь разговаривал с мамой."]
     }
-  ],
-  "new_tags": []
+  ]
 }
 """
 
@@ -154,11 +151,9 @@ class DiaryAI:
     async def extract_facts(
         self,
         raw_text: str,
-        existing_tags: list[str],
         message_datetime: datetime,
     ) -> ExtractionResult:
         user_payload = {
-            "existing_tags": existing_tags,
             "message_datetime": message_datetime.isoformat(),
             "raw_text": raw_text,
         }
@@ -170,7 +165,7 @@ class DiaryAI:
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ],
         )
-        content = response.choices[0].message.content or '{"entries":[],"new_tags":[]}'
+        content = response.choices[0].message.content or '{"entries":[]}'
         return ExtractionResult.model_validate_json(content)
 
     async def extract_health(
@@ -216,8 +211,7 @@ class DiaryAI:
     ) -> str:
         context = [
             {
-                "datetime": entry.datetime.isoformat(),
-                "tags": entry.tags,
+                "datetime": entry.occurred_at.isoformat(),
                 "facts": entry.facts,
             }
             for entry in entries

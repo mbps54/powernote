@@ -1,29 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
-from .models import DiaryEntry, EmbeddingRecord, FitnessEntry, NutritionEntry, UserProfile
-
-
-DEFAULT_TAGS = [
-    "семья",
-    "машина",
-    "цены",
-    "финансы",
-    "работа",
-    "здоровье",
-    "документы",
-    "покупки",
-    "дом",
-    "путешествия",
-    "друзья",
-    "обучение",
-]
+from .models import DiaryEntry, EmbeddingRecord, FailedMessage, FitnessEntry, NutritionEntry, UserProfile
 
 NATURAL_FOOD_HINTS = (
     "овощ",
@@ -114,34 +98,72 @@ def nutrition_quality_metadata_present(entry: NutritionEntry) -> bool:
 class DiaryStorage:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
-        self.diary_log_path = data_dir / "diary.log"
         self.diary_jsonl_path = data_dir / "diary.jsonl"
-        self.tags_path = data_dir / "tags.json"
-        self.raw_transcripts_path = data_dir / "raw_transcripts.log"
+        self.failed_messages_path = data_dir / "failed_messages.jsonl"
         self.embeddings_path = data_dir / "embeddings.jsonl"
         self.profile_path = data_dir / "profile.json"
-        self.nutrition_log_path = data_dir / "nutrition.log"
         self.nutrition_jsonl_path = data_dir / "nutrition.jsonl"
-        self.fitness_log_path = data_dir / "fitness.log"
         self.fitness_jsonl_path = data_dir / "fitness.jsonl"
 
     def ensure_initialized(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.diary_log_path.touch(exist_ok=True)
         self.diary_jsonl_path.touch(exist_ok=True)
-        self.raw_transcripts_path.touch(exist_ok=True)
+        self.failed_messages_path.touch(exist_ok=True)
         self.embeddings_path.touch(exist_ok=True)
-        self.nutrition_log_path.touch(exist_ok=True)
         self.nutrition_jsonl_path.touch(exist_ok=True)
-        self.fitness_log_path.touch(exist_ok=True)
         self.fitness_jsonl_path.touch(exist_ok=True)
+        diary_changed = self._migrate_jsonl(self.diary_jsonl_path, "diary")
+        self._migrate_jsonl(self.nutrition_jsonl_path, "nutrition")
+        self._migrate_jsonl(self.fitness_jsonl_path, "fitness")
+        if diary_changed:
+            self.embeddings_path.write_text("", encoding="utf-8")
+        for legacy_name in ("diary.log", "nutrition.log", "fitness.log", "tags.json", "raw_transcripts.log"):
+            (self.data_dir / legacy_name).unlink(missing_ok=True)
         if not self.profile_path.exists():
             self.write_profile(UserProfile())
-        if not self.tags_path.exists():
-            self.tags_path.write_text(
-                json.dumps({"tags": DEFAULT_TAGS}, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+
+    @staticmethod
+    def _migrate_jsonl(path: Path, kind: str) -> bool:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        changed = False
+        migrated: list[dict[str, object]] = []
+        previous_source_key: tuple[str, str] | None = None
+        message_group = -1
+
+        for index, line in enumerate(lines):
+            payload = json.loads(line)
+            if "occurred_at" not in payload:
+                payload["occurred_at"] = payload.pop("datetime")
+                changed = True
+            if kind == "diary" and "tags" in payload:
+                payload.pop("tags")
+                changed = True
+
+            source_key = (str(payload.get("source", "")), str(payload.get("raw_text", "")))
+            if source_key != previous_source_key:
+                message_group += 1
+                previous_source_key = source_key
+            if "message_id" not in payload:
+                payload["message_id"] = str(
+                    uuid5(NAMESPACE_URL, f"powernote:{kind}:legacy-message:{message_group}:{source_key}")
+                )
+                changed = True
+            if "created_at" not in payload:
+                payload["created_at"] = payload["occurred_at"]
+                changed = True
+            if "id" not in payload:
+                identity = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                payload["id"] = str(uuid5(NAMESPACE_URL, f"powernote:{kind}:legacy-entry:{index}:{identity}"))
+                changed = True
+            migrated.append(payload)
+
+        if changed:
+            temp_path = path.with_suffix(path.suffix + ".tmp")
+            with temp_path.open("w", encoding="utf-8") as file:
+                for payload in migrated:
+                    file.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            temp_path.replace(path)
+        return changed
 
     def read_profile(self) -> UserProfile:
         self.ensure_initialized()
@@ -154,26 +176,10 @@ class DiaryStorage:
             encoding="utf-8",
         )
 
-    def get_tags(self) -> list[str]:
+    def append_failed_message(self, message: FailedMessage) -> None:
         self.ensure_initialized()
-        payload = json.loads(self.tags_path.read_text(encoding="utf-8"))
-        return sorted({str(tag).strip().lower() for tag in payload.get("tags", []) if str(tag).strip()})
-
-    def update_tags(self, tags: list[str]) -> list[str]:
-        existing = set(self.get_tags())
-        normalized = {tag.strip().lower() for tag in tags if tag.strip()}
-        merged = sorted(existing | normalized)
-        self.tags_path.write_text(
-            json.dumps({"tags": merged}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return merged
-
-    def append_raw_transcript(self, message_datetime: datetime, source: str, raw_text: str) -> None:
-        self.ensure_initialized()
-        line = f"{message_datetime.isoformat()} [{source}] {raw_text.strip()}\n"
-        with self.raw_transcripts_path.open("a", encoding="utf-8") as file:
-            file.write(line)
+        with self.failed_messages_path.open("a", encoding="utf-8") as file:
+            file.write(message.model_dump_json() + "\n")
 
     def append_entries(self, entries: list[DiaryEntry]) -> None:
         self.ensure_initialized()
@@ -184,15 +190,6 @@ class DiaryStorage:
             for entry in entries:
                 jsonl_file.write(entry.model_dump_json() + "\n")
 
-        with self.diary_log_path.open("a", encoding="utf-8") as log_file:
-            for entry in entries:
-                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-                tags = ", ".join(entry.tags)
-                facts = " ".join(entry.facts)
-                log_file.write(f"{timestamp} [{tags}]\n{facts}\n\n")
-
-        self.update_tags([tag for entry in entries for tag in entry.tags])
-
     def append_nutrition_entries(self, entries: list[NutritionEntry]) -> None:
         self.ensure_initialized()
         if not entries:
@@ -202,21 +199,6 @@ class DiaryStorage:
             for entry in entries:
                 jsonl_file.write(entry.model_dump_json() + "\n")
 
-        with self.nutrition_log_path.open("a", encoding="utf-8") as log_file:
-            for entry in entries:
-                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-                items = ", ".join(entry.items)
-                log_file.write(
-                    f"{timestamp} [{entry.meal_name}] score={self.meal_nutrition_score(entry):.0f}\n"
-                    f"{items}\n"
-                    f"kcal={entry.calories_kcal:.0f}, protein={entry.protein_g:.1f}g, "
-                    f"fat={entry.fat_g:.1f}g, carbs={entry.carbs_g:.1f}g, "
-                    f"fiber={entry.fiber_g:.1f}g, fruit_veg={entry.fruit_veg_g:.0f}g, "
-                    f"added_sugar={entry.added_sugar_g:.1f}g, "
-                    f"ultra_processed={entry.ultra_processed_score}/100\n"
-                    f"{entry.score_reason}\n\n"
-                )
-
     def append_fitness_entries(self, entries: list[FitnessEntry]) -> None:
         self.ensure_initialized()
         if not entries:
@@ -225,17 +207,6 @@ class DiaryStorage:
         with self.fitness_jsonl_path.open("a", encoding="utf-8") as jsonl_file:
             for entry in entries:
                 jsonl_file.write(entry.model_dump_json() + "\n")
-
-        with self.fitness_log_path.open("a", encoding="utf-8") as log_file:
-            for entry in entries:
-                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-                muscles = ", ".join(entry.muscle_groups)
-                log_file.write(
-                    f"{timestamp} [{entry.activity_type}] score={entry.effort_score}\n"
-                    f"duration={entry.duration_minutes} min, intensity={entry.intensity}, "
-                    f"muscles={muscles}, kcal={entry.estimated_calories_kcal:.0f}\n"
-                    f"{entry.score_reason}\n\n"
-                )
 
     def read_entries(self) -> list[DiaryEntry]:
         self.ensure_initialized()
@@ -268,13 +239,13 @@ class DiaryStorage:
         return self.read_entries()[-limit:]
 
     def entries_for_date(self, target_date: date) -> list[DiaryEntry]:
-        return [entry for entry in self.read_entries() if entry.datetime.date() == target_date]
+        return [entry for entry in self.read_entries() if entry.occurred_at.date() == target_date]
 
     def nutrition_for_date(self, target_date: date) -> list[NutritionEntry]:
         return [
             entry
             for entry in self.read_nutrition_entries()
-            if entry.datetime.date() == target_date
+            if entry.occurred_at.date() == target_date
         ]
 
     def fitness_for_week(self, week_date: date) -> list[FitnessEntry]:
@@ -283,14 +254,14 @@ class DiaryStorage:
         return [
             entry
             for entry in self.read_fitness_entries()
-            if week_start <= entry.datetime.date() < week_end
+            if week_start <= entry.occurred_at.date() < week_end
         ]
 
     def fitness_for_date(self, target_date: date) -> list[FitnessEntry]:
         return [
             entry
             for entry in self.read_fitness_entries()
-            if entry.datetime.date() == target_date
+            if entry.occurred_at.date() == target_date
         ]
 
     @classmethod
@@ -350,14 +321,14 @@ class DiaryStorage:
         elif entry.calories_kcal < 150 and entry.protein_g < 10:
             score -= 4
 
-        if entry.datetime.hour >= 21:
+        if entry.occurred_at.hour >= 21:
             if entry.calories_kcal >= 600:
                 score -= 10
             elif entry.calories_kcal >= 350:
                 score -= 7
             elif entry.calories_kcal >= 150:
                 score -= 3
-            if entry.datetime.hour >= 23 and entry.calories_kcal >= 100:
+            if entry.occurred_at.hour >= 23 and entry.calories_kcal >= 100:
                 score -= 2
 
         text = cls.text_for_nutrition([entry])
@@ -465,7 +436,7 @@ class DiaryStorage:
             return 0
 
         calories = totals["calories_kcal"]
-        target_date = entries[-1].datetime.date()
+        target_date = entries[-1].occurred_at.date()
         day_progress = cls.nutrition_day_progress(target_date, as_of)
         fiber_progress = max(0.25, day_progress * 0.85)
         protein_ratio = totals["protein_g"] / max(profile.nutrition_targets.protein_g * day_progress, 1)
@@ -475,7 +446,7 @@ class DiaryStorage:
         calorie_ratio = calories / max(profile.nutrition_targets.calories_kcal * day_progress, 1)
         weighted_entry_score = totals["health_score"]
         has_quality_metadata = any(nutrition_quality_metadata_present(entry) for entry in entries)
-        late_calories = sum(entry.calories_kcal for entry in entries if entry.datetime.hour >= 21)
+        late_calories = sum(entry.calories_kcal for entry in entries if entry.occurred_at.hour >= 21)
         if late_calories >= 700:
             late_penalty = 8
         elif late_calories >= 400:
@@ -709,28 +680,13 @@ class DiaryStorage:
             "health_score": health_score,
         }
 
-    def entries_by_tag(self, tag: str, limit: int = 10) -> list[DiaryEntry]:
-        normalized = tag.strip().lower()
-        entries = [entry for entry in self.read_entries() if normalized in entry.tags]
-        return entries[-limit:]
-
     @staticmethod
     def entry_key(entry: DiaryEntry) -> str:
-        payload = {
-            "datetime": entry.datetime.isoformat(),
-            "tags": entry.tags,
-            "facts": entry.facts,
-            "source": entry.source,
-            "raw_text": entry.raw_text,
-        }
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        return entry.id
 
     @staticmethod
     def embedding_text(entry: DiaryEntry) -> str:
-        tags = ", ".join(entry.tags)
-        facts = " ".join(entry.facts)
-        return f"Теги: {tags}\nФакты: {facts}"
+        return " ".join(entry.facts)
 
     def read_embeddings(self, model: str) -> dict[str, list[float]]:
         self.ensure_initialized()
@@ -789,10 +745,6 @@ class DiaryStorage:
         self._write_jsonl(self.embeddings_path, records)
 
     @staticmethod
-    def _same_source_message(left: DiaryEntry | NutritionEntry | FitnessEntry, right: DiaryEntry | NutritionEntry | FitnessEntry) -> bool:
-        return left.raw_text == right.raw_text and left.source == right.source
-
-    @staticmethod
     def _write_jsonl(path: Path, entries: list[DiaryEntry] | list[NutritionEntry] | list[FitnessEntry] | list[EmbeddingRecord]) -> None:
         temp_path = path.with_suffix(path.suffix + ".tmp")
         with temp_path.open("w", encoding="utf-8") as file:
@@ -800,98 +752,52 @@ class DiaryStorage:
                 file.write(entry.model_dump_json() + "\n")
         temp_path.replace(path)
 
-    def _rewrite_diary_log(self, entries: list[DiaryEntry]) -> None:
-        with self.diary_log_path.open("w", encoding="utf-8") as log_file:
-            for entry in entries:
-                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-                tags = ", ".join(entry.tags)
-                facts = " ".join(entry.facts)
-                log_file.write(f"{timestamp} [{tags}]\n{facts}\n\n")
-
-    def _rewrite_nutrition_log(self, entries: list[NutritionEntry]) -> None:
-        with self.nutrition_log_path.open("w", encoding="utf-8") as log_file:
-            for entry in entries:
-                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-                items = ", ".join(entry.items)
-                log_file.write(
-                    f"{timestamp} [{entry.meal_name}] score={self.meal_nutrition_score(entry):.0f}\n"
-                    f"{items}\n"
-                    f"kcal={entry.calories_kcal:.0f}, protein={entry.protein_g:.1f}g, "
-                    f"fat={entry.fat_g:.1f}g, carbs={entry.carbs_g:.1f}g, "
-                    f"fiber={entry.fiber_g:.1f}g, fruit_veg={entry.fruit_veg_g:.0f}g, "
-                    f"added_sugar={entry.added_sugar_g:.1f}g, "
-                    f"ultra_processed={entry.ultra_processed_score}/100\n"
-                    f"{entry.score_reason}\n\n"
-                )
-
-    def _rewrite_fitness_log(self, entries: list[FitnessEntry]) -> None:
-        with self.fitness_log_path.open("w", encoding="utf-8") as log_file:
-            for entry in entries:
-                timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-                muscles = ", ".join(entry.muscle_groups)
-                log_file.write(
-                    f"{timestamp} [{entry.activity_type}] score={entry.effort_score}\n"
-                    f"duration={entry.duration_minutes} min, intensity={entry.intensity}, "
-                    f"muscles={muscles}, kcal={entry.estimated_calories_kcal:.0f}\n"
-                    f"{entry.score_reason}\n\n"
-                )
-
-    def _rewrite_tags_from_diary(self, entries: list[DiaryEntry]) -> None:
-        tags = sorted(set(DEFAULT_TAGS) | {tag for entry in entries for tag in entry.tags})
-        self.tags_path.write_text(
-            json.dumps({"tags": tags}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
     def undo_last_saved_entry(self, embedding_model: str | None = None) -> dict[str, object] | None:
         self.ensure_initialized()
         diary_entries = self.read_entries()
         nutrition_entries = self.read_nutrition_entries()
         fitness_entries = self.read_fitness_entries()
 
-        candidates: list[tuple[datetime, int, str]] = []
-        if diary_entries:
-            candidates.append((diary_entries[-1].datetime, len(diary_entries), "diary"))
-        if nutrition_entries:
-            candidates.append((nutrition_entries[-1].datetime, len(nutrition_entries), "nutrition"))
-        if fitness_entries:
-            candidates.append((fitness_entries[-1].datetime, len(fitness_entries), "fitness"))
-        if not candidates:
+        all_entries: list[tuple[str, DiaryEntry | NutritionEntry | FitnessEntry]] = [
+            *(("diary", entry) for entry in diary_entries),
+            *(("nutrition", entry) for entry in nutrition_entries),
+            *(("fitness", entry) for entry in fitness_entries),
+        ]
+        if not all_entries:
             return None
 
-        kind = max(candidates)[2]
-        if kind == "diary":
-            entries = diary_entries
-            path = self.diary_jsonl_path
-        elif kind == "nutrition":
-            entries = nutrition_entries
-            path = self.nutrition_jsonl_path
-        else:
-            entries = fitness_entries
-            path = self.fitness_jsonl_path
+        _, last_entry = max(all_entries, key=lambda candidate: candidate[1].created_at)
+        message_id = last_entry.message_id
+        removed_diary = [entry for entry in diary_entries if entry.message_id == message_id]
+        removed_nutrition = [entry for entry in nutrition_entries if entry.message_id == message_id]
+        removed_fitness = [entry for entry in fitness_entries if entry.message_id == message_id]
 
-        last_entry = entries[-1]
-        split_at = len(entries) - 1
-        while split_at > 0 and self._same_source_message(entries[split_at - 1], last_entry):
-            split_at -= 1
-        kept_entries = entries[:split_at]
-        removed_entries = entries[split_at:]
-
-        self._write_jsonl(path, kept_entries)
-        if kind == "diary":
-            self._rewrite_diary_log(kept_entries)
-            self._rewrite_tags_from_diary(kept_entries)
+        if removed_diary:
+            self._write_jsonl(self.diary_jsonl_path, [entry for entry in diary_entries if entry.message_id != message_id])
             if embedding_model:
-                self.delete_embeddings(embedding_model, removed_entries)
-        elif kind == "nutrition":
-            self._rewrite_nutrition_log(kept_entries)
-        else:
-            self._rewrite_fitness_log(kept_entries)
+                self.delete_embeddings(embedding_model, removed_diary)
+        if removed_nutrition:
+            self._write_jsonl(
+                self.nutrition_jsonl_path,
+                [entry for entry in nutrition_entries if entry.message_id != message_id],
+            )
+        if removed_fitness:
+            self._write_jsonl(
+                self.fitness_jsonl_path,
+                [entry for entry in fitness_entries if entry.message_id != message_id],
+            )
+
+        removed_by_kind = {
+            "diary": len(removed_diary),
+            "nutrition": len(removed_nutrition),
+            "fitness": len(removed_fitness),
+        }
+        kinds = [kind for kind, count in removed_by_kind.items() if count]
 
         return {
-            "kind": kind,
-            "count": len(removed_entries),
-            "last_datetime": last_entry.datetime,
+            "kinds": kinds,
+            "count": sum(removed_by_kind.values()),
+            "last_datetime": last_entry.occurred_at,
             "raw_text": last_entry.raw_text,
         }
 

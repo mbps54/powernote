@@ -9,7 +9,7 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 - Telegram bot as the main interface.
 - Voice message and plain text input.
 - Speech-to-text via OpenAI.
-- Fact and tag extraction via OpenAI with structured JSON output.
+- Fact extraction via OpenAI with structured JSON output.
 - Semantic question answering over diary entries using embeddings and an LLM.
 - Nutrition detection with estimated calories, protein, fat, carbs, fiber, fruit/vegetable intake, added sugar, ultra-processed food score, and a daily quality score.
 - Fitness detection with daily walk, cardio, strength, and activity health score tracking.
@@ -18,16 +18,12 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 - Explicit Telegram modes with buttons for `Diary`, `Nutrition`, `Fitness`, and `Search`.
 - Auto-detection remains available when no mode is selected.
 - Local file-based storage:
-  - `data/diary.log`
   - `data/diary.jsonl`
   - `data/embeddings.jsonl`
-  - `data/nutrition.log`
   - `data/nutrition.jsonl`
-  - `data/fitness.log`
   - `data/fitness.jsonl`
   - `data/profile.json`
-  - `data/tags.json`
-  - `data/raw_transcripts.log`
+  - `data/failed_messages.jsonl`
 - Bot commands:
   - `/start` - help message.
   - `/note <text>` - force-save text as a diary entry.
@@ -35,8 +31,6 @@ The project is designed as a self-hosted personal service. It runs with Docker C
   - `/fitness <text>` - force-save text as a fitness entry.
   - `/last` - show the last 5 entries.
   - `/today` - show today's entries.
-  - `/tags` - list known tags.
-  - `/tag <tag>` - show entries by tag.
   - `/search <query>` - answer a question using diary content.
   - `/profile` - show nutrition and fitness profile settings.
   - `/profile_setup` - run a profile setup questionnaire.
@@ -160,7 +154,7 @@ When no mode is selected, PowerNote AI still tries to auto-detect whether a mess
 
 When a message contains food, PowerNote AI replies with estimated calories, protein, fiber, the added meal score, and today's totals. Daily nutrition quality also accounts for calories, protein, fiber, fruit/vegetable intake, added sugar, and ultra-processed food. When a message contains a workout or physical activity, it replies with today's walk, cardio, strength, and activity health score.
 
-If a voice transcription or automatic classification is wrong, use `/undo_last` or the `Удалить последнее` Telegram button. PowerNote AI removes the latest saved entry group from diary, nutrition, or fitness JSONL storage.
+If a voice transcription or automatic classification is wrong, use `/undo_last` or the `Delete Last` Telegram button. PowerNote AI removes every diary, nutrition, and fitness entry created from the latest Telegram message.
 
 ## Grafana Dashboard
 
@@ -266,40 +260,31 @@ docker compose logs -f powernote
 
 ## Storage Format
 
-`data/diary.log`:
-
-```text
-2026-06-23 22:14 [family]
-The user talked to their mother. The mother said she would arrive on Saturday.
-```
-
 `data/diary.jsonl`:
 
 ```json
-{"datetime":"2026-06-23T22:14:00+02:00","tags":["family"],"facts":["The user talked to their mother."],"source":"voice","raw_text":"Today I talked to my mother..."}
+{"id":"82d4...","message_id":"telegram:123:456","occurred_at":"2026-06-23T22:14:00+02:00","created_at":"2026-06-23T22:15:08+02:00","facts":["The user talked to their mother."],"source":"voice","raw_text":"Today I talked to my mother..."}
 ```
 
-`data/tags.json`:
+Every stored entry has a stable `id`. `message_id` groups all records extracted from one Telegram message, `occurred_at` describes when the event happened, and `created_at` records when it was saved. This allows `Delete Last` to work correctly even for backdated entries.
 
-```json
-{"tags":["family","car","prices","finance","work","health","documents","shopping"]}
-```
+`data/embeddings.jsonl` stores entry vectors separately from the main diary and links them by entry `id`. New entries are indexed when they are saved. Older entries are indexed automatically on the first `/search` request. Search first retrieves relevant entries by embeddings, then the LLM produces a direct answer using only the retrieved facts.
 
-`data/embeddings.jsonl` stores entry vectors separately from the main diary. New entries are indexed when they are saved. Older entries are indexed automatically on the first `/search` request. Search first retrieves relevant entries by embeddings, then the LLM produces a direct answer using only the retrieved facts.
-
-`data/raw_transcripts.log` stores raw text transcripts before fact extraction. This helps preserve input when the OpenAI API is temporarily unavailable.
+`data/failed_messages.jsonl` stores the original text only when OpenAI processing fails. Successfully processed messages are not duplicated in a separate transcript log.
 
 `data/nutrition.jsonl`:
 
 ```json
-{"datetime":"2026-07-14T09:30:00+02:00","meal_name":"breakfast","items":["oatmeal","banana"],"calories_kcal":420,"protein_g":18,"fat_g":10,"carbs_g":65,"fiber_g":8,"fruit_veg_g":120,"added_sugar_g":0,"ultra_processed_score":10,"health_score":78,"score_reason":"Good fiber and moderate calories, but protein could be higher.","source":"text","raw_text":"I had oatmeal with a banana for breakfast."}
+{"id":"70c2...","message_id":"telegram:123:457","occurred_at":"2026-07-14T09:30:00+02:00","created_at":"2026-07-14T09:31:04+02:00","meal_name":"breakfast","items":["oatmeal","banana"],"calories_kcal":420,"protein_g":18,"fat_g":10,"carbs_g":65,"fiber_g":8,"fruit_veg_g":120,"added_sugar_g":0,"ultra_processed_score":10,"health_score":78,"score_reason":"Good fiber and moderate calories, but protein could be higher.","source":"text","raw_text":"I had oatmeal with a banana for breakfast."}
 ```
 
 `data/fitness.jsonl`:
 
 ```json
-{"datetime":"2026-07-14T19:00:00+02:00","activity_type":"run","duration_minutes":30,"intensity":"moderate","muscle_groups":["legs"],"estimated_calories_kcal":300,"effort_score":75,"score_reason":"Good cardio session for the current goal.","source":"voice","raw_text":"I ran for 30 minutes."}
+{"id":"e498...","message_id":"telegram:123:458","occurred_at":"2026-07-14T19:00:00+02:00","created_at":"2026-07-14T19:01:22+02:00","activity_type":"cardio","duration_minutes":30,"intensity":"moderate","muscle_groups":["legs"],"estimated_calories_kcal":300,"effort_score":75,"score_reason":"Good cardio session for the current goal.","source":"voice","raw_text":"I ran for 30 minutes."}
 ```
+
+Existing JSONL files using the previous `datetime` and `tags` format are migrated automatically on startup. Legacy text logs, the tag registry, and the full raw transcript log are removed after migration; diary embeddings are rebuilt automatically when search is next used.
 
 `data/profile.json` stores the local health profile used for nutrition and fitness scoring. By default it assumes a 40-year-old person, 76 kg, 176 cm, desk job, with a goal to lose 5 kg and build muscle. Run `/profile_setup` in the bot to update it interactively.
 

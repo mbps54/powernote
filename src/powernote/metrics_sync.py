@@ -82,11 +82,11 @@ def sync_once(storage: DiaryStorage, connection: psycopg.Connection) -> None:
 
     nutrition_by_day: dict[date, list[NutritionEntry]] = defaultdict(list)
     for entry in storage.read_nutrition_entries():
-        nutrition_by_day[entry.datetime.date()].append(entry)
+        nutrition_by_day[entry.occurred_at.date()].append(entry)
 
     fitness_by_day: dict[date, list[FitnessEntry]] = defaultdict(list)
     for entry in storage.read_fitness_entries():
-        fitness_by_day[entry.datetime.date()].append(entry)
+        fitness_by_day[entry.occurred_at.date()].append(entry)
 
     with connection.cursor() as cursor:
         cursor.execute("truncate table nutrition_daily")

@@ -5,8 +5,11 @@ from powernote.storage import DiaryStorage
 
 
 def fitness_entry(activity_type: str) -> FitnessEntry:
+    now = datetime.now(timezone.utc)
     return FitnessEntry(
-        datetime=datetime.now(timezone.utc),
+        message_id="test-message",
+        occurred_at=now,
+        created_at=now,
         activity_type=activity_type,
         duration_minutes=60,
         source="test",
@@ -15,8 +18,11 @@ def fitness_entry(activity_type: str) -> FitnessEntry:
 
 
 def nutrition_entry(items: list[str], fiber_g: float, health_score: int = 70) -> NutritionEntry:
+    now = datetime.now(timezone.utc)
     return NutritionEntry(
-        datetime=datetime.now(timezone.utc),
+        message_id="test-message",
+        occurred_at=now,
+        created_at=now,
         meal_name="перекус",
         items=items,
         calories_kcal=90,
@@ -45,7 +51,9 @@ def test_juice_scores_lower_than_whole_fruit() -> None:
 
 def test_good_breakfast_is_not_judged_against_full_day_targets() -> None:
     breakfast = NutritionEntry(
-        datetime=datetime(2026, 8, 3, 8, 0, tzinfo=timezone.utc),
+        message_id="test-breakfast",
+        occurred_at=datetime(2026, 8, 3, 8, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 3, 8, 1, tzinfo=timezone.utc),
         meal_name="завтрак",
         items=["яйца", "овсяная каша", "овощи"],
         calories_kcal=520,
@@ -73,8 +81,8 @@ def test_good_breakfast_is_not_judged_against_full_day_targets() -> None:
 
 def test_large_late_meal_scores_lower_than_same_early_meal() -> None:
     early = nutrition_entry(["ужин"], fiber_g=3, health_score=70)
-    early.datetime = datetime(2026, 8, 3, 19, 0, tzinfo=timezone.utc)
+    early.occurred_at = datetime(2026, 8, 3, 19, 0, tzinfo=timezone.utc)
     early.calories_kcal = 650
-    late = early.model_copy(update={"datetime": datetime(2026, 8, 3, 23, 0, tzinfo=timezone.utc)})
+    late = early.model_copy(update={"occurred_at": datetime(2026, 8, 3, 23, 0, tzinfo=timezone.utc)})
 
     assert DiaryStorage.meal_nutrition_score(late) < DiaryStorage.meal_nutrition_score(early)

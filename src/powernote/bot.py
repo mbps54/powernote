@@ -16,7 +16,7 @@ from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 from .ai import DiaryAI
 from .config import Settings
 from .entry_datetime import explicit_entry_datetime
-from .models import DiaryEntry, FitnessEntry, NutritionEntry, UserProfile
+from .models import DiaryEntry, FailedMessage, FitnessEntry, NutritionEntry, UserProfile
 from .storage import DiaryStorage, nutrition_quality_metadata_present
 
 logger = logging.getLogger(__name__)
@@ -91,10 +91,9 @@ def format_entries(entries: list[DiaryEntry], empty_text: str = "Записей 
 
     chunks: list[str] = []
     for entry in entries:
-        timestamp = entry.datetime.strftime("%Y-%m-%d %H:%M")
-        tags = ", ".join(entry.tags)
+        timestamp = entry.occurred_at.strftime("%Y-%m-%d %H:%M")
         facts = " ".join(entry.facts)
-        chunks.append(f"{timestamp} [{tags}]\n{facts}")
+        chunks.append(f"{timestamp}\n{facts}")
     return "\n\n".join(chunks)
 
 
@@ -230,9 +229,9 @@ def format_meal_assessment(entries: list[NutritionEntry]) -> str:
 
 def format_nutrition_meals(entries: list[NutritionEntry]) -> str:
     lines = ["Приемы пищи:"]
-    for entry in sorted(entries, key=lambda item: item.datetime):
+    for entry in sorted(entries, key=lambda item: item.occurred_at):
         lines.append(
-            f"- {entry.datetime.strftime('%H:%M')} {format_nutrition_summary([entry])}: "
+            f"- {entry.occurred_at.strftime('%H:%M')} {format_nutrition_summary([entry])}: "
             f"{entry.calories_kcal:.0f} ккал, белок {entry.protein_g:.0f}, "
             f"клетчатка {entry.fiber_g:.0f}, score {DiaryStorage.meal_nutrition_score(entry):.0f}/100"
         )
@@ -246,7 +245,7 @@ def format_daily_nutrition_assessment(
     as_of: datetime | None = None,
 ) -> str:
     parts: list[str] = []
-    target_date = entries[-1].datetime.date()
+    target_date = entries[-1].occurred_at.date()
     day_progress = DiaryStorage.nutrition_day_progress(target_date, as_of)
     protein_progress_ratio = totals["protein_g"] / max(profile.nutrition_targets.protein_g * day_progress, 1)
     fiber_progress_ratio = totals["fiber_g"] / max(profile.nutrition_targets.fiber_g * max(0.25, day_progress * 0.85), 1)
@@ -263,7 +262,7 @@ def format_daily_nutrition_assessment(
             " ".join(entry.score_reason.lower() for entry in entries),
         ]
     )
-    late_calories = sum(entry.calories_kcal for entry in entries if entry.datetime.hour >= 21)
+    late_calories = sum(entry.calories_kcal for entry in entries if entry.occurred_at.hour >= 21)
 
     if day_progress < 0.45:
         if totals["health_score"] >= 75:
@@ -402,7 +401,8 @@ def format_undo_result(result: dict[str, object] | None) -> str:
         "nutrition": "питание",
         "fitness": "фитнес",
     }
-    kind = labels.get(str(result["kind"]), str(result["kind"]))
+    kinds = result.get("kinds", [])
+    kind = ", ".join(labels.get(str(value), str(value)) for value in kinds) or "запись"
     timestamp = result["last_datetime"]
     timestamp_text = timestamp.strftime("%Y-%m-%d %H:%M") if isinstance(timestamp, datetime) else str(timestamp)
     raw_text = str(result.get("raw_text") or "").strip()
@@ -582,17 +582,29 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         source: str,
         message_datetime: datetime,
         mode: EntryMode = "auto",
-    ) -> bool:
+        message_id: str = "",
+    ) -> Literal["saved", "none", "error"]:
         profile = storage.read_profile()
         try:
             health = await diary_ai.extract_health(raw_text, profile, message_datetime, mode)
-        except Exception:
+        except Exception as error:
             logger.exception("Health extraction failed")
-            return False
+            storage.append_failed_message(
+                FailedMessage(
+                    created_at=message_datetime,
+                    source=source,
+                    stage="health_extraction",
+                    raw_text=raw_text,
+                    error=type(error).__name__,
+                )
+            )
+            return "error"
 
         nutrition_entries = [
             NutritionEntry(
-                datetime=floor_to_quarter_hour(resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text)),
+                message_id=message_id,
+                occurred_at=floor_to_quarter_hour(resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text)),
+                created_at=message_datetime,
                 meal_name=(item.meal_name or "").strip() or "meal",
                 items=[entry.strip() for entry in item.items if entry.strip()],
                 calories_kcal=max(item.calories_kcal, 0),
@@ -613,7 +625,9 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         ]
         fitness_entries = [
             FitnessEntry(
-                datetime=resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text),
+                message_id=message_id,
+                occurred_at=resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text),
+                created_at=message_datetime,
                 activity_type=(item.activity_type or "").strip() or "activity",
                 duration_minutes=max(item.duration_minutes, 0),
                 intensity=(item.intensity or "").strip() or "unknown",
@@ -629,13 +643,13 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         ]
 
         if not nutrition_entries and not fitness_entries:
-            return False
+            return "none"
 
         chunks: list[str] = []
         if nutrition_entries:
             storage.append_nutrition_entries(nutrition_entries)
             added = storage.nutrition_totals(nutrition_entries)
-            meal_datetime = nutrition_entries[-1].datetime
+            meal_datetime = nutrition_entries[-1].occurred_at
             day_entries = storage.nutrition_for_date(meal_datetime.date())
             day = storage.nutrition_totals(day_entries)
             day["health_score"] = storage.daily_nutrition_score(day_entries, day, profile, message_datetime)
@@ -653,7 +667,7 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         if fitness_entries:
             storage.append_fitness_entries(fitness_entries)
             added_fitness = storage.fitness_daily_totals(fitness_entries, profile)
-            fitness_datetime = fitness_entries[-1].datetime
+            fitness_datetime = fitness_entries[-1].occurred_at
             day_entries = storage.fitness_for_date(fitness_datetime.date())
             day = storage.fitness_daily_totals(day_entries, profile)
             day_prefix = "Сегодня" if fitness_datetime.date() == message_datetime.date() else f"За {fitness_datetime:%d.%m}"
@@ -666,17 +680,31 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             )
 
         await message.answer("\n\n".join(chunks))
-        return True
+        return "saved"
 
     async def process_text(message: Message, raw_text: str, source: str, mode: EntryMode = "auto") -> None:
         if await reject_if_needed(message):
             return
 
         message_datetime = datetime.now(settings.timezone)
-        storage.append_raw_transcript(message_datetime, source, raw_text)
+        message_id = f"telegram:{message.chat.id}:{message.message_id}"
         effective_mode = infer_auto_mode(raw_text) if mode == "auto" else mode
         if mode in ("auto", "nutrition", "fitness"):
-            if await process_health(message, raw_text, source, message_datetime, effective_mode):
+            health_result = await process_health(
+                message,
+                raw_text,
+                source,
+                message_datetime,
+                effective_mode,
+                message_id,
+            )
+            if health_result == "saved":
+                return
+            if health_result == "error":
+                await message.answer(
+                    "Не удалось обработать сообщение: сервис анализа сейчас недоступен. "
+                    "Сообщение сохранено в журнале ошибок. Попробуйте еще раз позже."
+                )
                 return
             if mode == "nutrition":
                 await message.answer("Не удалось распознать питание в сообщении. Попробуйте описать еду и порции подробнее.")
@@ -686,20 +714,30 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
                 return
 
         try:
-            extraction = await diary_ai.extract_facts(raw_text, storage.get_tags(), message_datetime)
-        except Exception:
+            extraction = await diary_ai.extract_facts(raw_text, message_datetime)
+        except Exception as error:
             logger.exception("Failed to extract facts from diary message")
+            storage.append_failed_message(
+                FailedMessage(
+                    created_at=message_datetime,
+                    source=source,
+                    stage="fact_extraction",
+                    raw_text=raw_text,
+                    error=type(error).__name__,
+                )
+            )
             await message.answer(
                 "Не удалось сохранить запись: сервис анализа текста сейчас недоступен. "
-                "Сырой текст сохранен во внутреннем логе, но запись в дневник не добавлена. "
+                "Сообщение сохранено в журнале ошибок, но запись в дневник не добавлена. "
                 "Попробуйте отправить сообщение еще раз после восстановления OpenAI-квоты."
             )
             return
 
         entries = [
             DiaryEntry(
-                datetime=resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text),
-                tags=[tag.strip().lower() for tag in item.tags if tag.strip()],
+                message_id=message_id,
+                occurred_at=resolve_entry_datetime(item.datetime_hint, message_datetime, raw_text),
+                created_at=message_datetime,
                 facts=[fact.strip() for fact in item.facts if fact.strip()],
                 source=source,
                 raw_text=raw_text,
@@ -708,8 +746,6 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             if item.facts
         ]
 
-        all_tags = [tag for entry in entries for tag in entry.tags] + extraction.new_tags
-        storage.update_tags(all_tags)
         storage.append_entries(entries)
         if entries:
             try:
@@ -757,8 +793,6 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             "/fitness <text> - сохранить фитнес\n"
             "/last - последние 5 записей\n"
             "/today - записи за сегодня\n"
-            "/tags - список тегов\n"
-            "/tag <tag> - записи по тегу\n"
             "/search <query> - поиск по смыслу\n"
             "/profile - профиль питания и фитнеса\n"
             "/profile_setup - настроить профиль\n"
@@ -781,12 +815,6 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
             return
         today_date = datetime.now(settings.timezone).date()
         await message.answer(format_entries(storage.entries_for_date(today_date), "За сегодня записей нет."))
-
-    @router.message(Command("tags"))
-    async def tags(message: Message) -> None:
-        if await reject_if_needed(message):
-            return
-        await message.answer("\n".join(storage.get_tags()) or "Тегов пока нет.")
 
     @router.message(Command("note"))
     async def note_command(message: Message, command: CommandObject, state: FSMContext) -> None:
@@ -918,16 +946,6 @@ def build_router(settings: Settings, storage: DiaryStorage, diary_ai: DiaryAI) -
         storage.write_profile(profile)
         await state.clear()
         await message.answer("Профиль обновлен.\n\n" + format_profile(profile), reply_markup=MAIN_KEYBOARD)
-
-    @router.message(Command("tag"))
-    async def tag(message: Message, command: CommandObject) -> None:
-        if await reject_if_needed(message):
-            return
-        tag_name = (command.args or "").strip().lower()
-        if not tag_name:
-            await message.answer("Укажите тег: /tag семья")
-            return
-        await message.answer(format_entries(storage.entries_by_tag(tag_name), f"Записей с тегом {tag_name} нет."))
 
     @router.message(Command("search"))
     async def search(message: Message, command: CommandObject, state: FSMContext) -> None:

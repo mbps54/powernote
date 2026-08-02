@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 
 class ExtractedEntry(BaseModel):
     datetime_hint: str | None = None
-    tags: list[str] = Field(default_factory=list)
     facts: list[str] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):
     entries: list[ExtractedEntry] = Field(default_factory=list)
-    new_tags: list[str] = Field(default_factory=list)
 
 
 class DiaryEntry(BaseModel):
-    datetime: datetime
-    tags: list[str]
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    message_id: str
+    occurred_at: datetime
+    created_at: datetime
     facts: list[str]
     source: str
     raw_text: str
@@ -62,7 +63,10 @@ class UserProfile(BaseModel):
 
 
 class NutritionEntry(BaseModel):
-    datetime: datetime
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    message_id: str
+    occurred_at: datetime
+    created_at: datetime
     meal_name: str
     items: list[str] = Field(default_factory=list)
     calories_kcal: float = 0
@@ -80,7 +84,10 @@ class NutritionEntry(BaseModel):
 
 
 class FitnessEntry(BaseModel):
-    datetime: datetime
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    message_id: str
+    occurred_at: datetime
+    created_at: datetime
     activity_type: str
     duration_minutes: int = 0
     intensity: str = "unknown"
@@ -124,3 +131,11 @@ class HealthExtractionResult(BaseModel):
     is_fitness: bool = False
     nutrition_entries: list[ExtractedNutritionEntry] = Field(default_factory=list)
     fitness_entries: list[ExtractedFitnessEntry] = Field(default_factory=list)
+
+
+class FailedMessage(BaseModel):
+    created_at: datetime
+    source: str
+    stage: str
+    raw_text: str
+    error: str
