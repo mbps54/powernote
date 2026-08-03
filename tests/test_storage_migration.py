@@ -33,14 +33,14 @@ def test_migrates_legacy_diary_and_removes_legacy_files(tmp_path) -> None:
 def test_undo_uses_creation_time_and_removes_entire_message(tmp_path) -> None:
     storage = DiaryStorage(tmp_path)
     storage.ensure_initialized()
-    old_created_at = datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)
+    old_created_at = datetime(2027, 5, 22, 16, 0, tzinfo=timezone.utc)
     new_created_at = datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc)
 
     storage.append_entries(
         [
             DiaryEntry(
-                message_id="older-message",
-                occurred_at=datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc),
+                message_id="legacy-migrated-message",
+                occurred_at=datetime(2027, 5, 22, 16, 0, tzinfo=timezone.utc),
                 created_at=old_created_at,
                 facts=["Старая запись"],
                 source="text",
@@ -51,7 +51,7 @@ def test_undo_uses_creation_time_and_removes_entire_message(tmp_path) -> None:
     storage.append_nutrition_entries(
         [
             NutritionEntry(
-                message_id="new-message",
+                message_id="telegram:123:456",
                 occurred_at=datetime(2026, 8, 1, 8, 0, tzinfo=timezone.utc),
                 created_at=new_created_at,
                 meal_name="завтрак",
@@ -64,7 +64,7 @@ def test_undo_uses_creation_time_and_removes_entire_message(tmp_path) -> None:
     storage.append_fitness_entries(
         [
             FitnessEntry(
-                message_id="new-message",
+                message_id="telegram:123:456",
                 occurred_at=datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc),
                 created_at=new_created_at,
                 activity_type="active_walk",

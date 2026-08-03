@@ -766,7 +766,13 @@ class DiaryStorage:
         if not all_entries:
             return None
 
-        _, last_entry = max(all_entries, key=lambda candidate: candidate[1].created_at)
+        _, last_entry = max(
+            all_entries,
+            key=lambda candidate: (
+                candidate[1].message_id.startswith("telegram:"),
+                candidate[1].created_at,
+            ),
+        )
         message_id = last_entry.message_id
         removed_diary = [entry for entry in diary_entries if entry.message_id == message_id]
         removed_nutrition = [entry for entry in nutrition_entries if entry.message_id == message_id]
