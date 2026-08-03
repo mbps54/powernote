@@ -167,19 +167,10 @@ def format_nutrition_totals(prefix: str, totals: dict[str, float]) -> str:
 def format_nutrition_remaining(profile: UserProfile, totals: dict[str, float]) -> str:
     calorie_target = profile.nutrition_targets.calories_kcal
     protein_target = profile.nutrition_targets.protein_g
-    calories_left = calorie_target - totals["calories_kcal"]
-    protein_left = protein_target - totals["protein_g"]
-    calorie_text = (
-        f"{calories_left:.0f}/{calorie_target:.0f} ккал"
-        if calories_left >= 0
-        else f"+{-calories_left:.0f} ккал сверх {calorie_target:.0f}"
+    return (
+        f"Результат: {totals['calories_kcal']:.0f}/{calorie_target:.0f} ккал, "
+        f"белок {totals['protein_g']:.0f}/{protein_target:.0f} г"
     )
-    protein_text = (
-        f"{protein_left:.0f}/{protein_target:.0f} г"
-        if protein_left >= 0
-        else f"+{-protein_left:.0f} г сверх {protein_target:.0f}"
-    )
-    return f"Результат: {calorie_text}, белок {protein_text}"
 
 
 def format_nutrition_quality_factors(profile: UserProfile, totals: dict[str, float]) -> str:
@@ -260,13 +251,13 @@ def format_daily_nutrition_assessment(
     calories_left = profile.nutrition_targets.calories_kcal - totals["calories_kcal"]
     fruit_veg_left = profile.nutrition_targets.fruit_veg_g - totals["fruit_veg_g"]
     sugar_over = totals["added_sugar_g"] - profile.nutrition_targets.added_sugar_g
-    combined_text = " ".join(
+    food_text = " ".join(
         [
             " ".join(item.lower() for entry in entries for item in entry.items),
             " ".join(entry.raw_text.lower() for entry in entries),
-            " ".join(entry.score_reason.lower() for entry in entries),
         ]
     )
+    combined_text = food_text + " " + " ".join(entry.score_reason.lower() for entry in entries)
     late_calories = sum(entry.calories_kcal for entry in entries if entry.occurred_at.hour >= 21)
 
     if day_progress < 0.45:
@@ -296,6 +287,31 @@ def format_daily_nutrition_assessment(
         parts.append("поздний объем еды великоват и снижает оценку")
     elif late_calories >= 200:
         parts.append("был заметный поздний прием пищи")
+
+    score_foods: list[str] = []
+    score_food_markers = (
+        ("чипсы", ("чипс",)),
+        ("шоколад", ("шоколад",)),
+        ("печенье", ("печенье", "печенья")),
+        ("конфеты", ("конфет",)),
+        ("сладкая выпечка", ("пирог", "торт", "круассан", "булоч", "пончик")),
+        ("варенье", ("варень",)),
+        ("сладкая газировка", ("кока-кол", "газиров")),
+        ("фастфуд", ("фастфуд", "бургер", "картошка фри")),
+        ("колбасные изделия", ("сосиск", "колбас")),
+        ("алкоголь", ("алког", "пиво")),
+    )
+    for label, markers in score_food_markers:
+        if any(marker in food_text for marker in markers):
+            score_foods.append(label)
+    if re.search(r"\bкола\b", food_text):
+        score_foods.append("сладкая газировка")
+    if re.search(r"\bвин(?:о|а|ом|у)\b", food_text):
+        score_foods.append("алкоголь")
+    if totals["added_sugar_g"] > 0 and "сахар" in food_text:
+        score_foods.append("добавленный сахар")
+    if score_foods:
+        parts.append("score снижают: " + ", ".join(dict.fromkeys(score_foods)))
 
     if day_progress < 0.9 and protein_progress_ratio >= 0.8:
         parts.append("белок идет по плану")
@@ -355,9 +371,7 @@ def format_daily_nutrition_assessment(
         if totals["ultra_processed_score"] > 45:
             parts.append("слишком много обработанной еды")
 
-    if any(marker in combined_text for marker in ("чипс", "сахар", "шоколад", "печень", "конфет", "кола", "алког", "фастфуд")):
-        parts.append("были продукты, снижающие score")
-    elif any(marker in combined_text for marker in ("овощ", "салат", "зелень", "ягод", "фрукт", "суп", "греч", "овсян", "рыб", "куриц")):
+    if not score_foods and any(marker in combined_text for marker in ("овощ", "салат", "зелень", "ягод", "фрукт", "суп", "греч", "овсян", "рыб", "куриц")):
         parts.append("по составу есть качественная еда")
 
     return "Оценка дня: " + "; ".join(parts[:6]) + "."

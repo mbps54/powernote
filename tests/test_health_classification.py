@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from powernote.bot import format_daily_nutrition_assessment, format_nutrition_remaining
 from powernote.models import FitnessEntry, NutritionEntry, UserProfile
 from powernote.storage import DiaryStorage
 
@@ -86,3 +87,28 @@ def test_large_late_meal_scores_lower_than_same_early_meal() -> None:
     late = early.model_copy(update={"occurred_at": datetime(2026, 8, 3, 23, 0, tzinfo=timezone.utc)})
 
     assert DiaryStorage.meal_nutrition_score(late) < DiaryStorage.meal_nutrition_score(early)
+
+
+def test_nutrition_result_always_shows_consumed_against_target() -> None:
+    result = format_nutrition_remaining(
+        UserProfile(),
+        {"calories_kcal": 2100, "protein_g": 130},
+    )
+
+    assert result == "Результат: 2100/1800 ккал, белок 130/120 г"
+
+
+def test_daily_assessment_names_foods_that_reduce_score() -> None:
+    entry = nutrition_entry(["чипсы 50 г", "шоколад 20 г"], fiber_g=2, health_score=35)
+    entry.added_sugar_g = 10
+    totals = DiaryStorage.nutrition_totals([entry])
+    assessment = format_daily_nutrition_assessment(
+        UserProfile(),
+        totals,
+        [entry],
+        entry.occurred_at,
+    )
+
+    assert "score снижают: чипсы, шоколад" in assessment
+    assert "сладкая газировка" not in assessment
+    assert "были продукты" not in assessment
