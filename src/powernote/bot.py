@@ -168,13 +168,18 @@ def format_nutrition_remaining(profile: UserProfile, totals: dict[str, float]) -
     calorie_target = profile.nutrition_targets.calories_kcal
     protein_target = profile.nutrition_targets.protein_g
     calories_left = calorie_target - totals["calories_kcal"]
-    protein_left = max(0, protein_target - totals["protein_g"])
+    protein_left = protein_target - totals["protein_g"]
     calorie_text = (
         f"{calories_left:.0f}/{calorie_target:.0f} ккал"
         if calories_left >= 0
         else f"+{-calories_left:.0f} ккал сверх {calorie_target:.0f}"
     )
-    return f"Осталось: {calorie_text}, белок +{protein_left:.0f} г"
+    protein_text = (
+        f"{protein_left:.0f}/{protein_target:.0f} г"
+        if protein_left >= 0
+        else f"+{-protein_left:.0f} г сверх {protein_target:.0f}"
+    )
+    return f"Результат: {calorie_text}, белок {protein_text}"
 
 
 def format_nutrition_quality_factors(profile: UserProfile, totals: dict[str, float]) -> str:
