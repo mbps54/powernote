@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from powernote.ai import HEALTH_SYSTEM_PROMPT
 from powernote.bot import format_daily_nutrition_assessment, format_nutrition_remaining
 from powernote.models import FitnessEntry, NutritionEntry, UserProfile
 from powernote.storage import DiaryStorage
@@ -112,3 +113,9 @@ def test_daily_assessment_names_foods_that_reduce_score() -> None:
     assert "score снижают: чипсы, шоколад" in assessment
     assert "сладкая газировка" not in assessment
     assert "были продукты" not in assessment
+
+
+def test_nutrition_prompt_does_not_copy_main_food_quantity_to_addition() -> None:
+    assert '"100 г макарон с маслом"' in HEALTH_SYSTEM_PROMPT
+    assert '"сливочное масло ≈5 г (оценка)"' in HEALTH_SYSTEM_PROMPT
+    assert "а не 100 г масла" in HEALTH_SYSTEM_PROMPT
