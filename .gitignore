@@ -1,5 +1,6 @@
 .env
 ansible/inventories/production.yml
+ansible/vpn-secrets.yml
 __pycache__/
 *.py[cod]
 .pytest_cache/

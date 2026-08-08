@@ -1,0 +1,7 @@
+l2tp_vpn_subnet: "10.99.0.0/24"
+l2tp_vpn_local_ip: "10.99.0.1"
+l2tp_vpn_client_range_start: "10.99.0.10"
+l2tp_vpn_client_range_end: "10.99.0.20"
+l2tp_vpn_dns_primary: "1.1.1.1"
+l2tp_vpn_dns_secondary: "1.0.0.1"
+l2tp_vpn_external_interface: "{{ ansible_default_ipv4.interface }}"

@@ -1,0 +1,19 @@
+name xl2tpd
+auth
+require-mschap-v2
+refuse-pap
+refuse-chap
+refuse-mschap
+refuse-eap
+noccp
+mtu 1400
+mru 1400
+proxyarp
+nodefaultroute
+ipcp-accept-local
+ipcp-accept-remote
+ms-dns {{ l2tp_vpn_dns_primary }}
+ms-dns {{ l2tp_vpn_dns_secondary }}
+lcp-echo-interval 30
+lcp-echo-failure 4
+connect-delay 5000

@@ -1,8 +1,11 @@
 - name: Deploy Powernote
   hosts: powernote
   gather_facts: true
+  vars_files:
+    - ../vpn-secrets.yml
 
   roles:
     - role: security
     - role: fail2ban
+    - role: l2tp_vpn
     - role: powernote

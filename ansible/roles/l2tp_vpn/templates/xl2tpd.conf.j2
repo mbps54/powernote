@@ -1,0 +1,11 @@
+[global]
+port = 1701
+
+[lns default]
+ip range = {{ l2tp_vpn_client_range_start }}-{{ l2tp_vpn_client_range_end }}
+local ip = {{ l2tp_vpn_local_ip }}
+require authentication = yes
+require chap = yes
+refuse pap = yes
+pppoptfile = /etc/ppp/options.l2tpd
+length bit = yes

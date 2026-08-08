@@ -1,0 +1,124 @@
+- name: Validate L2TP VPN secrets
+  ansible.builtin.assert:
+    that:
+      - l2tp_vpn_ipsec_psk | length >= 32
+      - l2tp_vpn_username | length >= 3
+      - l2tp_vpn_password | length >= 20
+    fail_msg: "Set strong L2TP credentials in ansible/vpn-secrets.yml"
+  no_log: true
+
+- name: Install L2TP IPsec packages
+  ansible.builtin.apt:
+    name:
+      - strongswan
+      - strongswan-charon
+      - libcharon-extra-plugins
+      - xl2tpd
+      - ppp
+      - iptables
+    state: present
+    update_cache: true
+
+- name: Configure IPv4 forwarding for VPN clients
+  ansible.builtin.template:
+    src: sysctl.conf.j2
+    dest: /etc/sysctl.d/99-powernote-vpn.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: l2tp_vpn_sysctl
+
+- name: Apply VPN sysctl settings
+  ansible.builtin.command:
+    cmd: sysctl --system
+  when: l2tp_vpn_sysctl.changed
+  changed_when: true
+
+- name: Configure strongSwan connection
+  ansible.builtin.template:
+    src: ipsec.conf.j2
+    dest: /etc/ipsec.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart IPsec
+
+- name: Configure IPsec pre-shared key
+  ansible.builtin.template:
+    src: ipsec.secrets.j2
+    dest: /etc/ipsec.secrets
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart IPsec
+
+- name: Configure xl2tpd
+  ansible.builtin.template:
+    src: xl2tpd.conf.j2
+    dest: /etc/xl2tpd/xl2tpd.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart xl2tpd
+
+- name: Configure PPP for L2TP
+  ansible.builtin.template:
+    src: options.l2tpd.j2
+    dest: /etc/ppp/options.l2tpd
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart xl2tpd
+
+- name: Configure PPP credentials
+  ansible.builtin.template:
+    src: chap-secrets.j2
+    dest: /etc/ppp/chap-secrets
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart xl2tpd
+
+- name: Install VPN firewall script
+  ansible.builtin.template:
+    src: powernote-vpn-firewall.j2
+    dest: /usr/local/sbin/powernote-vpn-firewall
+    owner: root
+    group: root
+    mode: "0750"
+  notify: Reload systemd and apply VPN firewall
+
+- name: Install VPN firewall service
+  ansible.builtin.template:
+    src: powernote-vpn-firewall.service.j2
+    dest: /etc/systemd/system/powernote-vpn-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd and apply VPN firewall
+
+- name: Apply pending VPN changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start VPN services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - strongswan-starter
+    - xl2tpd
+    - powernote-vpn-firewall
+
+- name: Read IPsec status
+  ansible.builtin.command:
+    cmd: ipsec status
+  register: l2tp_vpn_ipsec_status
+  changed_when: false
+
+- name: Verify VPN UDP listeners
+  ansible.builtin.shell:
+    cmd: ss -H -lun | awk '{print $4}' | grep -Eq ':(500|4500)$' && ss -H -lun | awk '{print $4}' | grep -Eq ':1701$'
+  changed_when: false

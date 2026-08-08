@@ -1,0 +1,12 @@
+[Unit]
+Description=PowerNote L2TP VPN firewall rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/powernote-vpn-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

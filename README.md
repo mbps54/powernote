@@ -48,6 +48,7 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 │   │   └── production.example.yml
 │   ├── playbooks/
 │   │   └── deploy.yml
+│   ├── vpn-secrets.example.yml
 │   └── roles/
 │       ├── security/
 │       │   ├── defaults/
@@ -55,6 +56,11 @@ The project is designed as a self-hosted personal service. It runs with Docker C
 │       │   ├── tasks/
 │       │   └── templates/
 │       ├── fail2ban/
+│       │   ├── defaults/
+│       │   ├── handlers/
+│       │   ├── tasks/
+│       │   └── templates/
+│       ├── l2tp_vpn/
 │       │   ├── defaults/
 │       │   ├── handlers/
 │       │   ├── tasks/
@@ -227,7 +233,17 @@ cp .env.example .env
 
 The same `.env` file is used for both local Docker Compose and remote Ansible deployment. During deployment, Ansible copies it to `/opt/powernote/.env` on the server with `0600` permissions.
 
-### 3. Run The Playbook
+### 3. Prepare VPN Credentials
+
+Create the ignored secrets file from its public template:
+
+```bash
+cp ansible/vpn-secrets.example.yml ansible/vpn-secrets.yml
+```
+
+Replace all placeholder values. Use a unique username, a long random password, and a random IPsec pre-shared key of at least 32 characters. For example, generate secrets with `openssl rand -hex 32`. The real `ansible/vpn-secrets.yml` is ignored by Git and must never be committed.
+
+### 4. Run The Playbook
 
 ```bash
 ansible-playbook -i ansible/inventories/production.yml ansible/playbooks/deploy.yml
@@ -238,6 +254,8 @@ The playbook performs a full server setup and deploy:
 - configures SSH on port `65022` and verifies that the new port is reachable;
 - installs Fail2ban and enables SSH protection: 5 failed attempts in 10 minutes, 24-hour ban;
 - sends Telegram notifications when Fail2ban bans an IP;
+- installs an L2TP/IPsec VPN using strongSwan, xl2tpd, and MSCHAPv2 authentication;
+- enables VPN client forwarding and exposes UDP ports `500` and `4500` while rejecting unprotected L2TP traffic;
 - installs Docker and the Docker Compose plugin;
 - creates `/opt/powernote` and `/opt/powernote/data`;
 - sets the data directory ownership to UID/GID `1000`, used by `appuser` inside the container;
@@ -249,7 +267,7 @@ The playbook performs a full server setup and deploy:
 - starts the existing image if there are no changes but the container is stopped.
 - starts Grafana on port `65080` with anonymous read-only access.
 
-### 4. Check The Server
+### 5. Check The Server
 
 ```bash
 ssh -p 65022 -i ~/.ssh/id_rsa root@YOUR_SERVER_IP
@@ -257,6 +275,18 @@ cd /opt/powernote
 docker compose ps
 docker compose logs -f powernote
 ```
+
+### Keenetic VPN Client
+
+Create an `L2TP/IPsec` connection in Keenetic with these fields:
+
+- server address: the VPS public IP address;
+- username and password: `l2tp_vpn_username` and `l2tp_vpn_password` from `ansible/vpn-secrets.yml`;
+- IPsec pre-shared key: `l2tp_vpn_ipsec_psk` from the same file;
+- authentication protocol: `MSCHAPv2`;
+- obtain the client IP address and DNS automatically.
+
+Do not configure plain L2TP without IPsec. The server accepts L2TP traffic only after IPsec protection has been established. VPN clients receive addresses from `10.99.0.10-10.99.0.20` and route internet traffic through the VPS.
 
 ## Storage Format
 
@@ -290,8 +320,8 @@ Existing JSONL files using the previous `datetime` and `tags` format are migrate
 
 ## Security Notes
 
-- Do not commit `.env` or real inventory files.
-- Only `.env.example` and `ansible/inventories/production.example.yml` should be committed.
+- Do not commit `.env`, real inventory files, or `ansible/vpn-secrets.yml`.
+- Only `.env.example`, `ansible/inventories/production.example.yml`, and `ansible/vpn-secrets.example.yml` should be committed.
 - Keep your working `.env` locally and on the server only.
 - Set `ALLOWED_TELEGRAM_USER_IDS` for a private diary.
 - The Ansible deployment configures SSH on port `65022` and installs Fail2ban with Telegram ban notifications.

@@ -1,0 +1,16 @@
+- name: Restart IPsec
+  ansible.builtin.systemd_service:
+    name: strongswan-starter
+    state: restarted
+
+- name: Restart xl2tpd
+  ansible.builtin.systemd_service:
+    name: xl2tpd
+    state: restarted
+
+- name: Reload systemd and apply VPN firewall
+  ansible.builtin.systemd_service:
+    name: powernote-vpn-firewall
+    daemon_reload: true
+    enabled: true
+    state: restarted

@@ -1,0 +1,20 @@
+config setup
+    uniqueids=no
+
+conn l2tp-psk
+    keyexchange=ikev1
+    authby=secret
+    type=transport
+    left=%defaultroute
+    leftprotoport=17/1701
+    right=%any
+    rightprotoport=17/%any
+    ike=aes256-sha256-modp2048,aes256-sha1-modp2048,aes128-sha1-modp2048!
+    esp=aes256-sha256,aes256-sha1,aes128-sha1!
+    forceencaps=yes
+    fragmentation=yes
+    dpdaction=clear
+    dpddelay=30s
+    dpdtimeout=120s
+    rekey=no
+    auto=add
